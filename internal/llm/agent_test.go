@@ -5,12 +5,34 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	hamcp "hass-agent-bot/internal/ha/mcp"
+	"hass-agent-bot/internal/scheduler"
 )
+
+// fakeScheduler implements the Scheduler interface for tests.
+type fakeScheduler struct {
+	jobs []scheduler.Job
+}
+
+func (f *fakeScheduler) ScheduleIn(d time.Duration, action scheduler.Action, label string) (*scheduler.Job, error) {
+	j := &scheduler.Job{ID: "fake-timer", Label: label, Action: action, RunAt: time.Now().Add(d)}
+	f.jobs = append(f.jobs, *j)
+	return j, nil
+}
+
+func (f *fakeScheduler) ScheduleCron(expr string, action scheduler.Action, label string) (*scheduler.Job, error) {
+	j := &scheduler.Job{ID: "fake-cron", Label: label, Action: action, CronExpr: expr}
+	f.jobs = append(f.jobs, *j)
+	return j, nil
+}
+
+func (f *fakeScheduler) Cancel(id string) bool { return false }
+func (f *fakeScheduler) List() []scheduler.Job  { return f.jobs }
 
 func TestAgent_HandleMessage_ToolCall(t *testing.T) {
 	// Setup: fake HA MCP server with a call_service tool
@@ -79,7 +101,7 @@ func TestAgent_HandleMessage_ToolCall(t *testing.T) {
 		t.Fatalf("giga client: %v", err)
 	}
 
-	agent := NewAgent(gigaCli, haCli)
+	agent := NewAgent(gigaCli, haCli, &fakeScheduler{})
 	reply, err := agent.HandleMessage(context.Background(), "включи свет в зале")
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
@@ -117,7 +139,7 @@ func TestAgent_HandleMessage_NoToolCall(t *testing.T) {
 		t.Fatalf("giga client: %v", err)
 	}
 
-	agent := NewAgent(gigaCli, haCli)
+	agent := NewAgent(gigaCli, haCli, &fakeScheduler{})
 	reply, err := agent.HandleMessage(context.Background(), "привет")
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
@@ -128,7 +150,7 @@ func TestAgent_HandleMessage_NoToolCall(t *testing.T) {
 }
 
 func TestAgent_Reset(t *testing.T) {
-	agent := NewAgent(nil, nil)
+	agent := NewAgent(nil, nil, nil)
 	agent.history = append(agent.history, Message{Role: "user", Content: "foo"})
 	agent.Reset()
 	if len(agent.history) != 0 {

@@ -4,13 +4,13 @@
 
 ## Текущий этап
 
-**Этап 04 — Telegram-каркас (завершён)**
+**Этап 05 — LLM-слой (завершён)**
 
-`internal/tg` готов: go-telegram/bot v1.25.0, allowlist-мидлварь, команды /start /help /list /status (list/status через MCP), core связывает TG с HA. Коммит `65b84d3`.
+`internal/llm` готов: GigaChat REST-клиент (OAuth-токен 30 мин с автообновлением, chat/completions с function calling), конвертация MCP tools → GigaChat functions, ReAct loop (до 5 итераций), история диалога (10 сообщений) + /reset. Текст из TG идёт в LLM, tool_call выполняется через HA MCP. Коммит `5910e54`.
 
 ## Что сейчас в разработке
 
-Этап 05 — LLM-слой: GigaChat + function calling + ReAct loop.
+Этап 06 — Таймеры: scheduler через LLM (tool `schedule_action`), cron, персистентность.
 
 ## Прогресс по этапам
 
@@ -20,8 +20,8 @@
 | 02 | config — env + yaml (HA, GigaChat, TG) | ✅ завершён |
 | 03 | ha/mcp — MCP-клиент к HA MCP Server | ✅ завершён |
 | 04 | telegram-core — TG-бот, команды | ✅ завершён |
-| 05 | llm — GigaChat + function calling + оркестрация | 🔄 в работе |
-| 06 | scheduler — таймеры, cron через LLM | ⬜ не начат |
+| 05 | llm — GigaChat + function calling + оркестрация | ✅ завершён |
+| 06 | scheduler — таймеры, cron через LLM | 🔄 в работе |
 | 07 | notify — уведомления из HA (WS) | ⬜ не начат |
 | 08 | deploy — systemd/docker, 24/7 | ⬜ не начат |
 

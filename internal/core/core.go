@@ -5,11 +5,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"hass-agent-bot/internal/config"
 	hamcp "hass-agent-bot/internal/ha/mcp"
 	"hass-agent-bot/internal/llm"
+	"hass-agent-bot/internal/scheduler"
 	"hass-agent-bot/internal/tg"
 )
 
@@ -19,6 +21,7 @@ type App struct {
 	mcp    *hamcp.Client
 	tg     *tg.Bot
 	llm    *llm.Agent
+	sched  *scheduler.Engine
 }
 
 func New(cfg *config.Config, logger *slog.Logger) *App {
@@ -57,15 +60,29 @@ func (a *App) Run() error {
 		return err
 	}
 
-	// Init LLM agent
-	agent := llm.NewAgent(gigaClient, mcpCli)
+	// Scheduler engine: persists timers next to the binary
+	statePath := filepath.Join(".", "scheduler_jobs.json")
+	sched := scheduler.New(func(ctx context.Context, action scheduler.Action) error {
+		a.logger.Info("scheduler: executing action", "action", action)
+		if err := mcpCli.CallService(ctx, action.Domain, action.Service, action.Data); err != nil {
+			a.logger.Error("scheduler: action failed", "error", err)
+			return err
+		}
+		return nil
+	}, statePath)
+	a.sched = sched
+	go sched.Run(ctx)
 
-	// Start Telegram bot (pass agent for text handling)
+	// Init LLM agent (with scheduler access)
+	agent := llm.NewAgent(gigaClient, mcpCli, sched)
+
+	// Start Telegram bot
 	tgBot, err := tg.New(
 		a.cfg.TG.Token,
 		a.cfg.TG.AllowUserIDs,
 		mcpCli,
 		tg.WithAgent(agent),
+		tg.WithScheduler(sched),
 	)
 	if err != nil {
 		a.logger.Error("failed to create TG bot", "error", err)
@@ -83,6 +100,7 @@ func (a *App) Run() error {
 	<-sig
 	a.logger.Info("shutting down...")
 	a.tg.Close(ctx)
+	sched.Stop()
 
 	return nil
 }

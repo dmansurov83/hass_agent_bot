@@ -12,20 +12,26 @@ import (
 
 	hamcp "hass-agent-bot/internal/ha/mcp"
 	"hass-agent-bot/internal/llm"
+	"hass-agent-bot/internal/scheduler"
 )
 
 type Bot struct {
-	cli   *bot.Bot
-	mcp   *hamcp.Client
-	agent *llm.Agent
-	allow map[int64]bool
-	log   *slog.Logger
+	cli    *bot.Bot
+	mcp    *hamcp.Client
+	agent  *llm.Agent
+	sched  *scheduler.Engine
+	allow  map[int64]bool
+	log    *slog.Logger
 }
 
 type Option func(*Bot)
 
 func WithAgent(agent *llm.Agent) Option {
 	return func(b *Bot) { b.agent = agent }
+}
+
+func WithScheduler(sched *scheduler.Engine) Option {
+	return func(b *Bot) { b.sched = sched }
 }
 
 func New(token string, allowIDs []int64, mcpCli *hamcp.Client, opts ...Option) (*Bot, error) {
@@ -48,6 +54,7 @@ func New(token string, allowIDs []int64, mcpCli *hamcp.Client, opts ...Option) (
 		bot.WithMessageTextHandler("/list", bot.MatchTypeExact, b.listHandler),
 		bot.WithMessageTextHandler("/status", bot.MatchTypeExact, b.statusHandler),
 		bot.WithMessageTextHandler("/reset", bot.MatchTypeExact, b.resetHandler),
+		bot.WithMessageTextHandler("/timers", bot.MatchTypeExact, b.timersHandler),
 		bot.WithDefaultHandler(b.textHandler),
 	}
 
@@ -117,6 +124,7 @@ func (b *Bot) helpHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 /list — список всех устройств в доме
 /status — статус подключения к Home Assistant
 /reset — сбросить историю диалога
+/timers — список активных таймеров и расписаний
 
 Просто напиши текстом, что хочешь сделать, например:
 — включи свет в гостиной
@@ -225,4 +233,37 @@ func (b *Bot) resetHandler(ctx context.Context, tgBot *bot.Bot, update *models.U
 		ChatID: chatID,
 		Text:   "История диалога сброшена.",
 	})
+}
+
+func (b *Bot) timersHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	chatID := update.Message.Chat.ID
+
+	if b.sched == nil {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Планировщик не инициализирован."})
+		return
+	}
+
+	jobs := b.sched.List()
+	if len(jobs) == 0 {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Активных таймеров нет."})
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Активные таймеры:\n")
+	for _, j := range jobs {
+		label := j.Label
+		if label == "" {
+			label = j.Action.Domain + "." + j.Action.Service
+		}
+		when := "?"
+		if j.Type == scheduler.TypeTimer {
+			when = "в " + j.RunAt.Local().Format("02.01 15:04")
+		} else {
+			when = "расписание: " + j.CronExpr
+		}
+		fmt.Fprintf(&sb, "🕐 %s\n   %s\n   ID: %s\n", label, when, j.ID)
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: sb.String()})
 }
