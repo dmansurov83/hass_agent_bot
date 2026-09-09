@@ -9,6 +9,7 @@ import (
 
 	"hass-agent-bot/internal/config"
 	hamcp "hass-agent-bot/internal/ha/mcp"
+	"hass-agent-bot/internal/llm"
 	"hass-agent-bot/internal/tg"
 )
 
@@ -17,6 +18,7 @@ type App struct {
 	logger *slog.Logger
 	mcp    *hamcp.Client
 	tg     *tg.Bot
+	llm    *llm.Agent
 }
 
 func New(cfg *config.Config, logger *slog.Logger) *App {
@@ -44,11 +46,26 @@ func (a *App) Run() error {
 	a.mcp = mcpCli
 	defer mcpCli.Close()
 
-	// Start Telegram bot
+	// Init GigaChat client
+	gigaClient, err := llm.NewGigaChatClient(llm.Options{
+		Credentials: a.cfg.GigaChat.Credentials,
+		Model:       a.cfg.GigaChat.Model,
+		Logger:      a.logger,
+	})
+	if err != nil {
+		a.logger.Error("failed to create GigaChat client", "error", err)
+		return err
+	}
+
+	// Init LLM agent
+	agent := llm.NewAgent(gigaClient, mcpCli)
+
+	// Start Telegram bot (pass agent for text handling)
 	tgBot, err := tg.New(
 		a.cfg.TG.Token,
 		a.cfg.TG.AllowUserIDs,
 		mcpCli,
+		tg.WithAgent(agent),
 	)
 	if err != nil {
 		a.logger.Error("failed to create TG bot", "error", err)

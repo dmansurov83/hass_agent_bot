@@ -4,13 +4,13 @@
 
 ## Текущий этап
 
-**Этап 03 — MCP-клиент HA (завершён)**
+**Этап 04 — Telegram-каркас (завершён)**
 
-`internal/ha/mcp` готов: подключение к HA MCP Server (Streamable HTTP + Bearer), tools ListEntities/GetState/CallService, 4 теста с in-process MCP-сервером. Коммит `bfa6e66`.
+`internal/tg` готов: go-telegram/bot v1.25.0, allowlist-мидлварь, команды /start /help /list /status (list/status через MCP), core связывает TG с HA. Коммит `65b84d3`.
 
 ## Что сейчас в разработке
 
-Этап 04 — Telegram-каркас: go-telegram/bot, allowlist, команды /start /help /list /status.
+Этап 05 — LLM-слой: GigaChat + function calling + ReAct loop.
 
 ## Прогресс по этапам
 
@@ -19,8 +19,8 @@
 | 01 | bootstrap — каркас Go-проекта | ✅ завершён |
 | 02 | config — env + yaml (HA, GigaChat, TG) | ✅ завершён |
 | 03 | ha/mcp — MCP-клиент к HA MCP Server | ✅ завершён |
-| 04 | telegram-core — TG-бот, команды | 🔄 в работе |
-| 05 | llm — GigaChat + function calling + оркестрация | ⬜ не начат |
+| 04 | telegram-core — TG-бот, команды | ✅ завершён |
+| 05 | llm — GigaChat + function calling + оркестрация | 🔄 в работе |
 | 06 | scheduler — таймеры, cron через LLM | ⬜ не начат |
 | 07 | notify — уведомления из HA (WS) | ⬜ не начат |
 | 08 | deploy — systemd/docker, 24/7 | ⬜ не начат |

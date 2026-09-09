@@ -11,16 +11,24 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	hamcp "hass-agent-bot/internal/ha/mcp"
+	"hass-agent-bot/internal/llm"
 )
 
 type Bot struct {
 	cli   *bot.Bot
 	mcp   *hamcp.Client
+	agent *llm.Agent
 	allow map[int64]bool
 	log   *slog.Logger
 }
 
-func New(token string, allowIDs []int64, mcpCli *hamcp.Client, opts ...bot.Option) (*Bot, error) {
+type Option func(*Bot)
+
+func WithAgent(agent *llm.Agent) Option {
+	return func(b *Bot) { b.agent = agent }
+}
+
+func New(token string, allowIDs []int64, mcpCli *hamcp.Client, opts ...Option) (*Bot, error) {
 	b := &Bot{
 		mcp:   mcpCli,
 		allow: make(map[int64]bool, len(allowIDs)),
@@ -29,17 +37,21 @@ func New(token string, allowIDs []int64, mcpCli *hamcp.Client, opts ...bot.Optio
 	for _, id := range allowIDs {
 		b.allow[id] = true
 	}
+	for _, o := range opts {
+		o(b)
+	}
 
-	opts = append(opts,
+	botOpts := []bot.Option{
 		bot.WithMiddlewares(b.allowlistMiddleware),
 		bot.WithMessageTextHandler("/start", bot.MatchTypeExact, b.startHandler),
 		bot.WithMessageTextHandler("/help", bot.MatchTypeExact, b.helpHandler),
 		bot.WithMessageTextHandler("/list", bot.MatchTypeExact, b.listHandler),
 		bot.WithMessageTextHandler("/status", bot.MatchTypeExact, b.statusHandler),
+		bot.WithMessageTextHandler("/reset", bot.MatchTypeExact, b.resetHandler),
 		bot.WithDefaultHandler(b.textHandler),
-	)
+	}
 
-	cli, err := bot.New(token, opts...)
+	cli, err := bot.New(token, botOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("tg: create bot: %w", err)
 	}
@@ -104,6 +116,7 @@ func (b *Bot) helpHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 /help — эта справка
 /list — список всех устройств в доме
 /status — статус подключения к Home Assistant
+/reset — сбросить историю диалога
 
 Просто напиши текстом, что хочешь сделать, например:
 — включи свет в гостиной
@@ -170,8 +183,46 @@ func (b *Bot) statusHandler(ctx context.Context, tgBot *bot.Bot, update *models.
 
 func (b *Bot) textHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
+	text := update.Message.Text
+
+	if b.agent == nil {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "Ассистент не инициализирован. Попробуй /help.",
+		})
+		return
+	}
+
+	// Tell the user we're processing
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   "Пока я не знаю, как ответить на это. Попробуй /help.",
+		Text:   "⏳ Думаю...",
+	})
+
+	// Send to LLM agent
+	reply, err := b.agent.HandleMessage(ctx, text)
+	if err != nil {
+		b.log.Error("tg: agent error", "error", err)
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   fmt.Sprintf("Ошибка: %v", err),
+		})
+		return
+	}
+
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   reply,
+	})
+}
+
+func (b *Bot) resetHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	chatID := update.Message.Chat.ID
+	if b.agent != nil {
+		b.agent.Reset()
+	}
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   "История диалога сброшена.",
 	})
 }
