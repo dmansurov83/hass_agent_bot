@@ -1,0 +1,23 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Go
+*.out
+go.work
+go.work.sum
+
+# Config (local)
+config.yaml
+.env
+*.local.yaml
+
+# OS
+.DS_Store
+Thumbs.db
