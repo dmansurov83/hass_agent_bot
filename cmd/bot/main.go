@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log/slog"
 	"os"
 
@@ -9,10 +10,13 @@ import (
 )
 
 func main() {
+	cfgPath := flag.String("config", "", "path to config.yaml")
+	flag.Parse()
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	cfg, err := config.Load("")
+	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
