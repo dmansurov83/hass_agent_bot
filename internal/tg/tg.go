@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	hamcp "hass-agent-bot/internal/ha/mcp"
 	"hass-agent-bot/internal/llm"
+	"hass-agent-bot/internal/notify"
 	"hass-agent-bot/internal/scheduler"
 )
 
@@ -20,7 +22,9 @@ type Bot struct {
 	mcp    *hamcp.Client
 	agent  *llm.Agent
 	sched  *scheduler.Engine
+	notify *notify.Engine
 	allow  map[int64]bool
+	first  int64 // first allowed user ID (for notify)
 	log    *slog.Logger
 }
 
@@ -34,6 +38,10 @@ func WithScheduler(sched *scheduler.Engine) Option {
 	return func(b *Bot) { b.sched = sched }
 }
 
+func WithNotify(ne *notify.Engine) Option {
+	return func(b *Bot) { b.notify = ne }
+}
+
 func New(token string, allowIDs []int64, mcpCli *hamcp.Client, opts ...Option) (*Bot, error) {
 	b := &Bot{
 		mcp:   mcpCli,
@@ -42,6 +50,9 @@ func New(token string, allowIDs []int64, mcpCli *hamcp.Client, opts ...Option) (
 	}
 	for _, id := range allowIDs {
 		b.allow[id] = true
+	}
+	if len(allowIDs) > 0 {
+		b.first = allowIDs[0]
 	}
 	for _, o := range opts {
 		o(b)
@@ -55,6 +66,7 @@ func New(token string, allowIDs []int64, mcpCli *hamcp.Client, opts ...Option) (
 		bot.WithMessageTextHandler("/status", bot.MatchTypeExact, b.statusHandler),
 		bot.WithMessageTextHandler("/reset", bot.MatchTypeExact, b.resetHandler),
 		bot.WithMessageTextHandler("/timers", bot.MatchTypeExact, b.timersHandler),
+		bot.WithMessageTextHandler("/quiet", bot.MatchTypeExact, b.quietHandler),
 		bot.WithDefaultHandler(b.textHandler),
 	}
 
@@ -125,6 +137,7 @@ func (b *Bot) helpHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 /status — статус подключения к Home Assistant
 /reset — сбросить историю диалога
 /timers — список активных таймеров и расписаний
+/quiet [часы] — пауза уведомлений на N часов (по умолчанию 1)
 
 Просто напиши текстом, что хочешь сделать, например:
 — включи свет в гостиной
@@ -262,8 +275,39 @@ func (b *Bot) timersHandler(ctx context.Context, tgBot *bot.Bot, update *models.
 		} else {
 			when = "расписание: " + j.CronExpr
 		}
-		fmt.Fprintf(&sb, "🕐 %s\n   %s\n   ID: %s\n", label, when, j.ID)
+fmt.Fprintf(&sb, "🕐 %s\n   %s\n   ID: %s\n", label, when, j.ID)
 	}
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: sb.String()})
+}
+
+func (b *Bot) quietHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
+	chatID := update.Message.Chat.ID
+	if b.notify == nil {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Уведомления не инициализированы."})
+		return
+	}
+
+	hours := 1
+	fields := strings.Fields(update.Message.Text)
+	if len(fields) > 1 {
+		if v, err := strconv.Atoi(fields[1]); err == nil && v > 0 {
+			hours = v
+		}
+	}
+
+	b.notify.SetQuiet(time.Now().Add(time.Duration(hours) * time.Hour))
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   fmt.Sprintf("Пауза уведомлений на %d ч.", hours),
+	})
+}
+
+// SendNotification sends a message from the notify engine to the owner's chat.
+func (b *Bot) SendNotification(ctx context.Context, text string) {
+	if b.first == 0 {
+		b.log.Warn("tg: no owner chat for notification")
+		return
+	}
+	b.SendMessage(ctx, b.first, text)
 }

@@ -11,6 +11,7 @@ import (
 	"hass-agent-bot/internal/config"
 	hamcp "hass-agent-bot/internal/ha/mcp"
 	"hass-agent-bot/internal/llm"
+	"hass-agent-bot/internal/notify"
 	"hass-agent-bot/internal/scheduler"
 	"hass-agent-bot/internal/tg"
 )
@@ -22,6 +23,7 @@ type App struct {
 	tg     *tg.Bot
 	llm    *llm.Agent
 	sched  *scheduler.Engine
+	notif  *notify.Engine
 }
 
 func New(cfg *config.Config, logger *slog.Logger) *App {
@@ -60,21 +62,29 @@ func (a *App) Run() error {
 		return err
 	}
 
-	// Scheduler engine: persists timers next to the binary
+	// Scheduler engine
 	statePath := filepath.Join(".", "scheduler_jobs.json")
 	sched := scheduler.New(func(ctx context.Context, action scheduler.Action) error {
 		a.logger.Info("scheduler: executing action", "action", action)
-		if err := mcpCli.CallService(ctx, action.Domain, action.Service, action.Data); err != nil {
-			a.logger.Error("scheduler: action failed", "error", err)
-			return err
-		}
-		return nil
+		return mcpCli.CallService(ctx, action.Domain, action.Service, action.Data)
 	}, statePath)
 	a.sched = sched
 	go sched.Run(ctx)
 
-	// Init LLM agent (with scheduler access)
+	// LLM agent
 	agent := llm.NewAgent(gigaClient, mcpCli, sched)
+
+	// Notifications engine
+	nf := notify.New(
+		a.cfg.HA.URL,
+		a.cfg.HA.Token,
+		notify.Config{
+			DebounceSeconds: a.cfg.Notify.DebounceSeconds,
+			Entities:        a.cfg.Notify.Entities,
+		},
+		nil, // sender set after bot created
+	)
+	a.notif = nf
 
 	// Start Telegram bot
 	tgBot, err := tg.New(
@@ -83,12 +93,21 @@ func (a *App) Run() error {
 		mcpCli,
 		tg.WithAgent(agent),
 		tg.WithScheduler(sched),
+		tg.WithNotify(nf),
 	)
 	if err != nil {
 		a.logger.Error("failed to create TG bot", "error", err)
 		return err
 	}
 	a.tg = tgBot
+
+	// Wire notification sender to TG bot
+	nf.SetSender(func(ctx context.Context, text string) {
+		a.tg.SendNotification(ctx, text)
+	})
+
+	// Start notification listener
+	go nf.Run(ctx)
 
 	// Graceful shutdown
 	sig := make(chan os.Signal, 1)

@@ -4,13 +4,13 @@
 
 ## Текущий этап
 
-**Этап 05 — LLM-слой (завершён)**
+**Этап 06 — Таймеры (завершён)**
 
-`internal/llm` готов: GigaChat REST-клиент (OAuth-токен 30 мин с автообновлением, chat/completions с function calling), конвертация MCP tools → GigaChat functions, ReAct loop (до 5 итераций), история диалога (10 сообщений) + /reset. Текст из TG идёт в LLM, tool_call выполняется через HA MCP. Коммит `5910e54`.
+`internal/scheduler` готов: таймеры (delay) + cron (robfig/cron), персистентность в scheduler_jobs.json, восстановление при рестарте, executor через HA MCP. LLM получил tool `schedule_action` («выключи через 15 минут», «свет в 7:00 по будням»). Команда `/timers` в TG. Коммит `3a294c6`.
 
 ## Что сейчас в разработке
 
-Этап 06 — Таймеры: scheduler через LLM (tool `schedule_action`), cron, персистентность.
+Этап 07 — Уведомления: события HA → сообщения в TG (WS/REST).
 
 ## Прогресс по этапам
 
@@ -21,8 +21,8 @@
 | 03 | ha/mcp — MCP-клиент к HA MCP Server | ✅ завершён |
 | 04 | telegram-core — TG-бот, команды | ✅ завершён |
 | 05 | llm — GigaChat + function calling + оркестрация | ✅ завершён |
-| 06 | scheduler — таймеры, cron через LLM | 🔄 в работе |
-| 07 | notify — уведомления из HA (WS) | ⬜ не начат |
+| 06 | scheduler — таймеры, cron через LLM | ✅ завершён |
+| 07 | notify — уведомления из HA (WS) | 🔄 в работе |
 | 08 | deploy — systemd/docker, 24/7 | ⬜ не начат |
 
 ## Главные решения (не менять без обсуждения)
