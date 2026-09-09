@@ -1,0 +1,18 @@
+ha:
+  url: http://192.168.1.10:8123
+  token: ""            # long-lived access token HA (или env HA_TOKEN)
+
+tg:
+  token: ""            # токен от @BotFather (или env TG_TOKEN)
+  allow_user_ids:
+    - 123456789        # твой Telegram user_id
+
+gigachat:
+  credentials: ""      # ключ авторизации GigaChat (или env GIGACHAT_CREDENTIALS)
+  model: GigaChat-2-Pro
+
+notify:
+  debounce_seconds: 30
+  entities:
+    - binary_sensor.*
+    - sensor.outdoor_temperature
