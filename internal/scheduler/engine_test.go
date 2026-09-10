@@ -22,7 +22,7 @@ func TestScheduleIn(t *testing.T) {
 	defer cancel()
 	go e.Run(ctx)
 
-	job, err := e.ScheduleIn(50*time.Millisecond, Action{Domain: "light", Service: "turn_off"}, "test")
+	job, err := e.ScheduleIn(50*time.Millisecond, Action{Tool: "HassTurnOff", Args: map[string]any{"name": "test"}}, "test")
 	if err != nil {
 		t.Fatalf("ScheduleIn: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestCancel(t *testing.T) {
 	e := New(exec, "")
 	t.Cleanup(e.Stop)
 
-	job, err := e.ScheduleIn(1*time.Hour, Action{Domain: "light", Service: "turn_on"}, "never")
+	job, err := e.ScheduleIn(1*time.Hour, Action{Tool: "HassTurnOn", Args: map[string]any{"name": "test"}}, "never")
 	if err != nil {
 		t.Fatalf("ScheduleIn: %v", err)
 	}
@@ -60,8 +60,8 @@ func TestList(t *testing.T) {
 	exec := func(ctx context.Context, a Action) error { return nil }
 	e := New(exec, "")
 
-	e.ScheduleIn(2*time.Hour, Action{Domain: "switch", Service: "turn_off"}, "a")
-	e.ScheduleIn(1*time.Hour, Action{Domain: "light", Service: "turn_on"}, "b")
+	e.ScheduleIn(2*time.Hour, Action{Tool: "HassTurnOff", Args: map[string]any{"name": "switch"}}, "a")
+	e.ScheduleIn(1*time.Hour, Action{Tool: "HassTurnOn", Args: map[string]any{"name": "light"}}, "b")
 
 	jobs := e.List()
 	if len(jobs) != 2 {
@@ -82,7 +82,7 @@ func TestPersistence(t *testing.T) {
 	e1 := New(exec, path)
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	go e1.Run(ctx1)
-	e1.ScheduleIn(1*time.Hour, Action{Domain: "light", Service: "turn_on", Text: "восстановлен"}, "test-persist")
+	e1.ScheduleIn(1*time.Hour, Action{Tool: "HassTurnOn", Args: map[string]any{"name": "light"}, Text: "восстановлен"}, "test-persist")
 	cancel1()
 	e1.Stop()
 
@@ -113,7 +113,7 @@ func TestPastTime(t *testing.T) {
 	exec := func(ctx context.Context, a Action) error { return nil }
 	e := New(exec, "")
 
-	_, err := e.ScheduleAt(time.Now().Add(-time.Hour), Action{Domain: "light", Service: "turn_on"}, "past")
+	_, err := e.ScheduleAt(time.Now().Add(-time.Hour), Action{Tool: "HassTurnOn"}, "past")
 	if err == nil {
 		t.Errorf("expected error for past time")
 	}

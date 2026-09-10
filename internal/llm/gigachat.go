@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://api.giga.chat"            // новый URL с 17.07.2026
+	defaultBaseURL = "https://gigachat.devices.sberbank.ru"   // старый URL (работает для старых аккаунтов)
 	legacyAuthURL  = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 	scopePers      = "GIGACHAT_API_PERS"
 	tokenTTL       = 30 * time.Minute

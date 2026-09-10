@@ -88,13 +88,16 @@ func (b *Bot) Close(ctx context.Context) {
 	b.cli.Close(ctx)
 }
 
-func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string) {
-	if _, err := b.cli.SendMessage(ctx, &bot.SendMessageParams{
+func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string) (int, error) {
+	msg, err := b.cli.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,
-	}); err != nil {
+	})
+	if err != nil {
 		b.log.Error("tg: send message", "chat_id", chatID, "error", err)
+		return 0, err
 	}
+	return msg.ID, nil
 }
 
 func (b *Bot) allowedUser(update *models.Update) bool {
@@ -155,28 +158,23 @@ func (b *Bot) listHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 		return
 	}
 
-	entities, err := b.mcp.ListEntities(ctx)
+	out, err := b.mcp.CallTool(ctx, "GetLiveContext", map[string]any{})
 	if err != nil {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("Ошибка получения списка устройств: %v", err)})
 		return
 	}
 
-	if len(entities) == 0 {
+	if strings.TrimSpace(out) == "" {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Нет доступных устройств (проверь Exposed entities в HA)."})
 		return
 	}
 
-	var sb strings.Builder
-	sb.WriteString("Устройства:\n")
-	for _, e := range entities {
-		name := e.FriendlyName
-		if name == "" {
-			name = e.EntityID
-		}
-		fmt.Fprintf(&sb, "• %s — %s (%s)\n", name, e.State, e.EntityID)
+	// GetLiveContext returns a full overview; show it (truncate if huge)
+	const maxLen = 3800
+	if len(out) > maxLen {
+		out = out[:maxLen] + "\n…"
 	}
-
-	tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: sb.String()})
+	tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: out})
 }
 
 func (b *Bot) statusHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -190,15 +188,14 @@ func (b *Bot) statusHandler(ctx context.Context, tgBot *bot.Bot, update *models.
 	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	entities, err := b.mcp.ListEntities(ctxTimeout)
-	if err != nil {
+	if _, err := b.mcp.CallTool(ctxTimeout, "GetLiveContext", map[string]any{}); err != nil {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("Home Assistant: недоступен (%v)", err)})
 		return
 	}
 
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   fmt.Sprintf("Подключение к Home Assistant: OK. Устройств: %d", len(entities)),
+		Text:   "Подключение к Home Assistant: OK",
 	})
 }
 
@@ -214,27 +211,40 @@ func (b *Bot) textHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 		return
 	}
 
-	// Tell the user we're processing
-	tgBot.SendMessage(ctx, &bot.SendMessageParams{
+	// Показываем индикатор, затем заменим его на ответ
+	msg, err := tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   "⏳ Думаю...",
 	})
+	if err != nil {
+		b.log.Error("tg: send thinking", "error", err)
+		return
+	}
 
 	// Send to LLM agent
 	reply, err := b.agent.HandleMessage(ctx, text)
 	if err != nil {
 		b.log.Error("tg: agent error", "error", err)
-		tgBot.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: chatID,
-			Text:   fmt.Sprintf("Ошибка: %v", err),
-		})
+		if _, editErr := tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: msg.ID,
+			Text:      fmt.Sprintf("Ошибка: %v", err),
+		}); editErr != nil {
+			b.log.Error("tg: edit error message", "error", editErr)
+		}
 		return
 	}
 
-	tgBot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   reply,
-	})
+	// Заменяем "⏳ Думаю..." на итоговый ответ
+	if _, editErr := tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: msg.ID,
+		Text:      reply,
+	}); editErr != nil {
+		// Если редактирование не удалось (например, слишком длинный текст) — шлём новым сообщением
+		b.log.Error("tg: edit reply", "error", editErr)
+		b.SendMessage(ctx, chatID, reply)
+	}
 }
 
 func (b *Bot) resetHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
@@ -267,7 +277,7 @@ func (b *Bot) timersHandler(ctx context.Context, tgBot *bot.Bot, update *models.
 	for _, j := range jobs {
 		label := j.Label
 		if label == "" {
-			label = j.Action.Domain + "." + j.Action.Service
+			label = j.Action.Tool
 		}
 		when := "?"
 		if j.Type == scheduler.TypeTimer {

@@ -1,0 +1,20 @@
+services:
+  hass-agent-bot:
+    build: .
+    image: hass-agent-bot:latest
+    container_name: hass-agent-bot
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Moscow
+      - HA_URL=${HA_URL}
+      - HA_TOKEN=${HA_TOKEN}
+      - TG_TOKEN=${TG_TOKEN}
+      - ALLOW_USERS=${ALLOW_USERS}
+      - GIGACHAT_CREDENTIALS=${GIGACHAT_CREDENTIALS}
+      - GIGACHAT_MODEL=GigaChat-2-Pro
+    volumes:
+      # конфиг (опционально, если используешь файл вместо env)
+      - ./config.yaml:/config.yaml:ro
+      # персистентность таймеров
+      - ./data:/data
+    command: ["--config", "/config.yaml"]

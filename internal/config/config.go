@@ -14,6 +14,7 @@ type Config struct {
 	TG       TGConfig
 	GigaChat GigaChatConfig
 	Notify   NotifyConfig
+	DataDir  string // директория для персистентности (таймеры и т.д.)
 }
 
 type HAConfig struct {
@@ -50,6 +51,7 @@ func Load(path string) (*Config, error) {
 		Notify: NotifyConfig{
 			DebounceSeconds: 30,
 		},
+		DataDir: ".", // по умолчанию рядом с бинарником
 	}
 
 	if path != "" {
@@ -94,6 +96,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("ALLOW_USERS"); v != "" {
 		cfg.TG.AllowUserIDs = parseIDs(v)
+	}
+	if v := os.Getenv("DATA_DIR"); v != "" {
+		cfg.DataDir = v
 	}
 }
 

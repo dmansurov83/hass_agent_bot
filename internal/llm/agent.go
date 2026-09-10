@@ -108,44 +108,11 @@ func (a *Agent) executeTool(ctx context.Context, fc *FunctionCall) (string, erro
 	a.log.Info("agent: executing tool", "name", fc.Name, "args", fc.Arguments)
 
 	switch fc.Name {
-	case "call_service":
-		domain, _ := fc.Arguments["domain"].(string)
-		service, _ := fc.Arguments["service"].(string)
-		data := make(map[string]any)
-		if d, ok := fc.Arguments["data"].(map[string]any); ok {
-			data = d
-		}
-		if eid, ok := fc.Arguments["entity_id"].(string); ok && data["entity_id"] == nil {
-			data["entity_id"] = eid
-		}
-		if err := a.mcp.CallService(ctxTool, domain, service, data); err != nil {
-			return "", err
-		}
-		return "успешно выполнено", nil
-
-	case "get_state":
-		eid, _ := fc.Arguments["entity_id"].(string)
-		st, err := a.mcp.GetState(ctxTool, eid)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("%s: %s (friendly_name: %v)", st.EntityID, st.State, st.Attributes["friendly_name"]), nil
-
-	case "list_entities":
-		entities, err := a.mcp.ListEntities(ctxTool)
-		if err != nil {
-			return "", err
-		}
-		result := ""
-		for _, e := range entities {
-			result += fmt.Sprintf("%s (%s): %s\n", e.EntityID, e.FriendlyName, e.State)
-		}
-		return result, nil
-
 	case "schedule_action":
 		return a.handleSchedule(ctx, fc.Arguments)
 
 	default:
+		// All HA tools (HassTurnOn, HassLightSet, GetLiveContext, ...) proxy directly to MCP
 		return a.mcp.CallTool(ctxTool, fc.Name, fc.Arguments)
 	}
 }
@@ -160,21 +127,17 @@ func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string
 		return "", fmt.Errorf("action is required")
 	}
 
+	// Extract HA tool name and args from the action
+	toolName, _ := actionRaw["name"].(string)
+	toolArgs, _ := actionRaw["arguments"].(map[string]any)
+	if toolName == "" {
+		// Fallback: try domain/service pattern
+		return "", fmt.Errorf("у action должно быть поле 'name' с именем инструмента HA (например HassTurnOn)")
+	}
+
 	act := scheduler.Action{
-		Domain:  strVal(actionRaw["domain"]),
-		Service: strVal(actionRaw["service"]),
-	}
-	if eid, ok := actionRaw["entity_id"].(string); ok {
-		act.Data = map[string]any{"entity_id": eid}
-	}
-	if d, ok := actionRaw["data"].(map[string]any); ok {
-		if act.Data == nil {
-			act.Data = d
-		} else {
-			for k, v := range d {
-				act.Data[k] = v
-			}
-		}
+		Tool: toolName,
+		Args: toolArgs,
 	}
 	label := strVal(args["label"])
 

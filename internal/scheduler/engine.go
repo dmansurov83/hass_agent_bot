@@ -13,12 +13,11 @@ import (
 	cronlib "github.com/robfig/cron/v3"
 )
 
-// Action is a deferred HA action: call a service via MCP.
+// Action is a deferred HA action: a raw MCP tool call executed later.
 type Action struct {
-	Domain  string         `json:"domain"`
-	Service string         `json:"service"`
-	Data    map[string]any `json:"data,omitempty"`
-	Text    string         `json:"text,omitempty"` // human-readable description
+	Tool string         `json:"tool"`
+	Args map[string]any `json:"args"`
+	Text string         `json:"text,omitempty"` // human-readable description
 }
 
 // JobType distinguishes one-shot timers from recurring cron jobs.

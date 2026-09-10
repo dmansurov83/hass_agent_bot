@@ -35,39 +35,32 @@ func (f *fakeScheduler) Cancel(id string) bool { return false }
 func (f *fakeScheduler) List() []scheduler.Job  { return f.jobs }
 
 func TestAgent_HandleMessage_ToolCall(t *testing.T) {
-	// Setup: fake HA MCP server with a call_service tool
+	// Setup: fake HA MCP server with a HassTurnOn tool (like real HA MCP)
 	mcpSrv := server.NewMCPServer("HA Test Agent", "1.0.0")
 
 	states := map[string]map[string]any{
 		"light.living_room": {"entity_id": "light.living_room", "state": "off", "attributes": map[string]any{"friendly_name": "Свет в зале"}},
 	}
 
-	callService := mcp.NewTool("call_service",
-		mcp.WithDescription("Call a service in Home Assistant"),
-		mcp.WithString("domain", mcp.Required()),
-		mcp.WithString("service", mcp.Required()),
+	hasTurnOn := mcp.NewTool("HassTurnOn",
+		mcp.WithDescription("Turns on/opens/presses a device or entity"),
+		mcp.WithString("name", mcp.Required()),
+		mcp.WithString("area"),
 	)
-	mcpSrv.AddTool(callService, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		service, _ := req.RequireString("service")
-		args := req.GetArguments()
-		entityID, _ := args["entity_id"].(string)
-		if entityID == "" {
-			if d, ok := args["data"].(map[string]any); ok {
-				entityID, _ = d["entity_id"].(string)
-			}
-		}
-		if service == "turn_on" && entityID == "light.living_room" {
+	mcpSrv.AddTool(hasTurnOn, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name, _ := req.RequireString("name")
+		if name != "" {
 			states["light.living_room"]["state"] = "on"
 			return mcp.NewToolResultText(`{"success": true}`), nil
 		}
-		return mcp.NewToolResultError("not implemented"), nil
+		return mcp.NewToolResultError("device not found"), nil
 	})
 
-	getState := mcp.NewTool("get_state",
-		mcp.WithDescription("Get state"),
-		mcp.WithString("entity_id", mcp.Required()),
+	getLiveCtx := mcp.NewTool("GetLiveContext",
+		mcp.WithDescription("Provides real-time information about the CURRENT state of devices"),
+		mcp.WithString("name"),
 	)
-	mcpSrv.AddTool(getState, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	mcpSrv.AddTool(getLiveCtx, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		data, _ := json.Marshal(states["light.living_room"])
 		return mcp.NewToolResultText(string(data)), nil
 	})
@@ -83,9 +76,9 @@ func TestAgent_HandleMessage_ToolCall(t *testing.T) {
 
 	// Setup: fake GigaChat with two responses: first tool_call, then text
 	giga := newFakeGigaChat(t,
-		// call 1: user says "включи свет" → GigaChat returns tool_call
-		chatResponseToolCall(t, "call_service",
-			map[string]any{"domain": "light", "service": "turn_on", "data": map[string]any{"entity_id": "light.living_room"}},
+		// call 1: user says "включи свет" → GigaChat returns tool_call HassTurnOn
+		chatResponseToolCall(t, "HassTurnOn",
+			map[string]any{"name": "Свет в зале"},
 		),
 		// call 2: after tool result, GigaChat returns text
 		chatResponseText("Свет в зале включён!"),
@@ -108,6 +101,10 @@ func TestAgent_HandleMessage_ToolCall(t *testing.T) {
 	}
 	if !stringsContains(reply, "Свет в зале") && !stringsContains(reply, "включ") {
 		t.Errorf("unexpected reply: %q", reply)
+	}
+	// Verify the state actually changed to on
+	if states["light.living_room"]["state"] != "on" {
+		t.Errorf("state = %v, want on (HassTurnOn should have executed)", states["light.living_room"]["state"])
 	}
 }
 

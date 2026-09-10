@@ -23,7 +23,7 @@ func convertParameters(schema mcp.ToolInputSchema) map[string]any {
 
 	props := make(map[string]any, len(schema.Properties))
 	for key, raw := range schema.Properties {
-		props[key] = raw // keep as-is (already matches JSON Schema)
+		props[key] = sanitizeSchema(raw)
 	}
 
 	result := map[string]any{
@@ -35,6 +35,53 @@ func convertParameters(schema mcp.ToolInputSchema) map[string]any {
 	}
 
 	return result
+}
+
+// sanitizeSchema converts a JSON Schema node from HA MCP into a form GigaChat
+// function-calling accepts. GigaChat (like OpenAI) rejects anyOf/oneOf/union
+// types inside tool parameters, which HA emits for e.g. volume_step. We collapse
+// such unions to a permissive "string" (safe: LLM just passes a raw value).
+func sanitizeSchema(node any) any {
+	m, ok := node.(map[string]any)
+	if !ok {
+		return node
+	}
+
+	// Descend into nested property objects
+	if props, ok := m["properties"].(map[string]any); ok {
+		for k := range props {
+			props[k] = sanitizeSchema(props[k])
+		}
+	}
+
+	// Items: arrays like {"items": {...}, "type": "array"} — recurse into items
+	if items, ok := m["items"].(map[string]any); ok {
+		m["items"] = sanitizeSchema(items)
+	}
+
+	// GigaChat requires an object type to declare its "properties" (even empty).
+	if t, _ := m["type"].(string); t == "object" {
+		if _, ok := m["properties"]; !ok {
+			m["properties"] = map[string]any{}
+		}
+	}
+
+	// Collapse unions to a plain "string" type
+	if _, hasAnyOf := m["anyOf"]; hasAnyOf {
+		return map[string]any{"type": "string", "description": orDescription(m)}
+	}
+	if _, hasOneOf := m["oneOf"]; hasOneOf {
+		return map[string]any{"type": "string", "description": orDescription(m)}
+	}
+
+	return m
+}
+
+func orDescription(m map[string]any) string {
+	if d, ok := m["description"].(string); ok && d != "" {
+		return d
+	}
+	return ""
 }
 
 // SchedulerFunction returns the function definition for the built-in scheduler
@@ -55,14 +102,16 @@ func SchedulerFunction() Function {
 				},
 				"action": map[string]any{
 					"type":        "object",
-					"description": "Действие, которое нужно выполнить",
+					"description": "Действие, которое нужно запустить. Содержит name (имя инструмента HA, например HassTurnOn) и arguments (параметры для этого инструмента)",
 					"properties": map[string]any{
-						"domain":    map[string]any{"type": "string", "description": "Домен HA (light, switch, cover, climate, script, scene)"},
-						"service":   map[string]any{"type": "string", "description": "Сервис (turn_on, turn_off, trigger и т.д.)"},
-						"entity_id": map[string]any{"type": "string", "description": "ID сущности"},
-						"data":      map[string]any{"type": "object", "description": "Дополнительные данные"},
+						"name": map[string]any{"type": "string", "description": "Имя инструмента HA: HassTurnOn, HassTurnOff, HassLightSet, HassClimateSetTemperature, HassSetVolume, HassBroadcast и т.д."},
+						"arguments": map[string]any{
+							"type": "object",
+							"description": "Аргументы, которые передаются инструменту. Для HassTurnOn/HassTurnOff: name (название устройства), area (зона), domain (домен); для HassLightSet: name/area, brightness (0-100), temperature (цветовая температура), color; для GetLiveContext: name, domain, area",
+							"properties": map[string]any{},
+						},
 					},
-					"required": []string{"domain", "service"},
+					"required": []string{"name"},
 				},
 				"label": map[string]any{
 					"type":        "string",
@@ -90,22 +139,31 @@ func SystemPrompt() Message {
 		Role: "system",
 		Content: `Ты — помощник для управления умным домом через Home Assistant.
 
-У тебя есть доступ к инструментам Home Assistant. Используй их чтобы:
-- Включать и выключать устройства (свет, розетки, чайники и т.д.)
-- Получать состояние устройств и датчиков
-- Вызывать сценарии (скрипты)
-- Запланировать действия на будущее (через schedule_action)
+У тебя есть доступ к инструментам Home Assistant (все имена с заглавной буквы, вызывай их как tool_call):
+- HassTurnOn — включить/открыть/активировать устройство (аргументы: name, area, domain)
+- HassTurnOff — выключить/закрыть устройство
+- HassLightSet — установить яркость (%) или цвет света
+- HassClimateSetTemperature — установить температуру климата
+- HassSetVolume / HassSetVolumeRelative — громкость медиа
+- HassMediaPause / HassMediaUnpause / HassMediaNext / HassMediaPrevious — управление медиа
+- HassBroadcast — озвучить сообщение через умный дом
+- HassCancelAllTimers — отменить все таймеры
+- GetLiveContext — получить ТЕКУЩЕЕ состояние устройств, датчиков, областей (аргументы: name, domain, area)
+- GetDateTime — текущие дата и время
+- schedule_action — запланировать действие в будущем (delay или cron)
 
 Правила:
-1. Отвечай кратко и понятно на русском языке, одним-двумя предложениями.
-2. Если пользователь не указал конкретное устройство — спроси уточнение.
-3. Не придумывай результаты — полагайся только на то, что вернули инструменты.
-4. Если инструмент вернул ошибку — честно скажи об этом.
-5. Для включения/выключения используй call_service с domain: light, switch, cover, climate, script, lock, scene и соответствующим service (turn_on, turn_off, trigger и т.д.).
-6. Для запроса состояния используй get_state с entity_id.
-7. Для списка устройств используй list_entities.
-8. Если пользователь спрашивает «какая температура», «что с окнами» и т.п. — используй get_state нужного sensor/binary_sensor.
-9. Передавай entity_id внутри поля "data" как объект, например для call_service: {"domain":"light","service":"turn_on","data":{"entity_id":"light.living_room"}}
-10. Для отложенных действий используй schedule_action. Укажи delay (например "15m", "2h") или cron (например "0 0 7 * * 1-5" для будильника по будням). Действие должно содержать domain, service и entity_id.`,
+1. Отвечай кратко и понятно на русском, одним-двумя предложениями.
+2. Имена устройств в Home Assistant — ТЕХНИЧЕСКИЕ (например "switch_hall_main", "my_kitchen_light", "Table-Led table-led-light"). Не выдумывай имена!
+3. Прежде чем включать/выключать устройство — ВСЕГДА сначала вызови GetLiveContext, чтобы узнать точные имена (поля "names") и области ("areas") устройств. Затем используй ТОЧНОЕ имя из ответа.
+4. Поле "domain" в HassTurnOn/HassTurnOff принимает МАССИВ строк, например ["light"], ["switch"], а не строку "light".
+5. Чтобы включить/выключить — вызови HassTurnOn/HassTurnOff с name (точное имя из GetLiveContext) и по возможности area (например "Гостиная", "Туалет").
+6. Если пользователь сказал «свет в гостиной», а в GetLiveContext есть area "Гостиная" — можно вызвать HassTurnOn с name и area, или с area без name (включит все устройства зоны).
+7. Чтобы узнать состояние/температуру — вызови GetLiveContext (с фильтром по name, domain, area) и перескажи значения.
+8. Если пользователь просит «покажи все устройства» — вызови GetLiveContext без аргументов и ПЕРЕЧИСЛИ устройства кратко списком.
+9. Не придумывай результаты — полагайся на ответ инструментов.
+10. Если инструмент вернул ошибку — честно скажи об этом.
+11. Для отложенных действий используй schedule_action (действие содержит name — имя инструмента HA, и arguments — его параметры).
+12. Если пользователь не указал, какое именно устройство — уточни.`,
 	}
 }

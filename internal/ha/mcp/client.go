@@ -96,3 +96,8 @@ func (c *Client) Close() error {
 	}
 	return c.mcp.Close()
 }
+
+// Raw returns the underlying MCP client for advanced use.
+func (c *Client) Raw() *client.Client {
+	return c.mcp
+}

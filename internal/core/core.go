@@ -63,10 +63,11 @@ func (a *App) Run() error {
 	}
 
 	// Scheduler engine
-	statePath := filepath.Join(".", "scheduler_jobs.json")
+	statePath := filepath.Join(a.cfg.DataDir, "scheduler_jobs.json")
 	sched := scheduler.New(func(ctx context.Context, action scheduler.Action) error {
-		a.logger.Info("scheduler: executing action", "action", action)
-		return mcpCli.CallService(ctx, action.Domain, action.Service, action.Data)
+		a.logger.Info("scheduler: executing action", "tool", action.Tool, "args", action.Args)
+		_, err := mcpCli.CallTool(ctx, action.Tool, action.Args)
+		return err
 	}, statePath)
 	a.sched = sched
 	go sched.Run(ctx)
