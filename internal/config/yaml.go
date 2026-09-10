@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,6 +18,15 @@ type yamlConfig struct {
 		Token        string  `yaml:"token"`
 		AllowUserIDs []int64 `yaml:"allow_user_ids"`
 	} `yaml:"tg"`
+	LLM struct {
+		Provider    string        `yaml:"provider"`
+		Model       string        `yaml:"model"`
+		Credentials string        `yaml:"credentials"`
+		BaseURL     string        `yaml:"base_url"`
+		Timeout     time.Duration `yaml:"timeout"`
+	} `yaml:"llm"`
+	// GigaChat — легаси-блок из старых конфигов. Используется как fallback,
+	// если новый блок `llm` не задан.
 	GigaChat struct {
 		Credentials string `yaml:"credentials"`
 		Model       string `yaml:"model"`
@@ -66,11 +76,35 @@ func loadYAML(path string, cfg *Config) error {
 	if len(y.TG.AllowUserIDs) > 0 {
 		cfg.TG.AllowUserIDs = y.TG.AllowUserIDs
 	}
-	if y.GigaChat.Credentials != "" {
-		cfg.GigaChat.Credentials = y.GigaChat.Credentials
+	if y.LLM.Provider != "" {
+		cfg.LLM.Provider = y.LLM.Provider
 	}
-	if y.GigaChat.Model != "" {
-		cfg.GigaChat.Model = y.GigaChat.Model
+	if y.LLM.Model != "" {
+		cfg.LLM.Model = y.LLM.Model
+	}
+	if y.LLM.Credentials != "" {
+		cfg.LLM.Credentials = y.LLM.Credentials
+	}
+	if y.LLM.BaseURL != "" {
+		cfg.LLM.BaseURL = y.LLM.BaseURL
+	}
+	if y.LLM.Timeout > 0 {
+		cfg.LLM.Timeout = y.LLM.Timeout
+	}
+
+	// Легаси-совместимость: если блок llm не задан, читаем из старого gigachat:
+	// credentials + model → в LLM.Credentials / LLM.Model, provider = "gigachat".
+	if y.LLM.Provider == "" && y.LLM.Model == "" && y.LLM.Credentials == "" && y.LLM.BaseURL == "" {
+		if y.GigaChat.Credentials != "" {
+			cfg.LLM.Credentials = y.GigaChat.Credentials
+		}
+		if y.GigaChat.Model != "" {
+			cfg.LLM.Model = y.GigaChat.Model
+		}
+		// Если был хоть какой-то легаси-блок, подразумеваем GigaChat
+		if y.GigaChat.Credentials != "" || y.GigaChat.Model != "" {
+			cfg.LLM.Provider = "gigachat"
+		}
 	}
 	if y.Notify.DebounceSeconds > 0 {
 		cfg.Notify.DebounceSeconds = y.Notify.DebounceSeconds

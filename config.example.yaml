@@ -9,9 +9,11 @@ tg:
   allow_user_ids:
     - 123456789        # твой Telegram user_id
 
-gigachat:
-  credentials: ""      # ключ авторизации GigaChat (или env GIGACHAT_CREDENTIALS)
+llm:
+  provider: gigachat       # gigachat | openai
   model: GigaChat-2-Pro
+  credentials: ""          # GigaChat: Basic-ключ, OpenAI: API key (sk-...)
+  base_url: ""             # Только для OpenAI-совместимых: https://api.deepseek.com, http://localhost:11434/v1, ...
 
 notify:
   debounce_seconds: 30

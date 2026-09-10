@@ -42,11 +42,14 @@ tg:
 	if len(cfg.TG.AllowUserIDs) != 2 || cfg.TG.AllowUserIDs[0] != 111 {
 		t.Errorf("AllowUserIDs = %v", cfg.TG.AllowUserIDs)
 	}
-	if cfg.GigaChat.Model != "GigaChat-2-Pro" {
-		t.Errorf("Model default = %q", cfg.GigaChat.Model)
+	if cfg.LLM.Model != "GigaChat-2-Pro" {
+		t.Errorf("Model default = %q", cfg.LLM.Model)
 	}
-	if cfg.GigaChat.Timeout != 30*time.Second {
-		t.Errorf("Timeout default = %v", cfg.GigaChat.Timeout)
+	if cfg.LLM.Timeout != 30*time.Second {
+		t.Errorf("Timeout default = %v", cfg.LLM.Timeout)
+	}
+	if cfg.LLM.Provider != "gigachat" {
+		t.Errorf("Provider default = %q", cfg.LLM.Provider)
 	}
 }
 
@@ -81,7 +84,7 @@ func TestLoad_EnvVars(t *testing.T) {
 	t.Setenv("HA_TOKEN", "env_ha_token")
 	t.Setenv("TG_TOKEN", "env_tg_token")
 	t.Setenv("ALLOW_USERS", "111,222")
-	t.Setenv("GIGACHAT_MODEL", "GigaChat-2-Max")
+	t.Setenv("LLM_MODEL", "GigaChat-2-Max")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -98,8 +101,84 @@ func TestLoad_EnvVars(t *testing.T) {
 	if len(cfg.TG.AllowUserIDs) != 2 {
 		t.Errorf("AllowUserIDs = %v", cfg.TG.AllowUserIDs)
 	}
-	if cfg.GigaChat.Model != "GigaChat-2-Max" {
-		t.Errorf("Model = %q", cfg.GigaChat.Model)
+	if cfg.LLM.Model != "GigaChat-2-Max" {
+		t.Errorf("Model = %q", cfg.LLM.Model)
+	}
+}
+
+func TestLoad_LegacyGigaChatBlock(t *testing.T) {
+	content := []byte(`
+ha:
+  url: http://192.168.1.100:8123
+  token: ha_token_123
+tg:
+  token: tg_token_456
+  allow_user_ids: [111]
+gigachat:
+  credentials: legacy_creds
+  model: GigaChat-Pro
+notify:
+  debounce_seconds: 10
+`)
+	f := writeTemp(t, content)
+	defer os.Remove(f)
+
+	cfg, err := Load(f)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.LLM.Provider != "gigachat" {
+		t.Errorf("Provider = %q, want gigachat (from legacy)", cfg.LLM.Provider)
+	}
+	if cfg.LLM.Credentials != "legacy_creds" {
+		t.Errorf("Credentials = %q", cfg.LLM.Credentials)
+	}
+	if cfg.LLM.Model != "GigaChat-Pro" {
+		t.Errorf("Model = %q", cfg.LLM.Model)
+	}
+	if cfg.LLM.BaseURL != "" {
+		t.Errorf("BaseURL should be empty, got %q", cfg.LLM.BaseURL)
+	}
+}
+
+func TestLoad_NewLLMOverridesLegacy(t *testing.T) {
+	// Когда есть оба блока — llm имеет приоритет над gigachat
+	content := []byte(`
+ha:
+  url: http://192.168.1.100:8123
+  token: ha_token_123
+tg:
+  token: tg_token_456
+  allow_user_ids: [111]
+gigachat:
+  credentials: legacy_creds
+  model: GigaChat-Pro
+llm:
+  provider: openai
+  model: gpt-4o
+  credentials: sk-new-key
+  base_url: https://api.openai.com/v1
+`)
+	f := writeTemp(t, content)
+	defer os.Remove(f)
+
+	cfg, err := Load(f)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.LLM.Provider != "openai" {
+		t.Errorf("Provider = %q, want openai", cfg.LLM.Provider)
+	}
+	if cfg.LLM.Credentials != "sk-new-key" {
+		t.Errorf("Credentials = %q, want sk-new-key", cfg.LLM.Credentials)
+	}
+	if cfg.LLM.Model != "gpt-4o" {
+		t.Errorf("Model = %q, want gpt-4o", cfg.LLM.Model)
+	}
+	if cfg.LLM.BaseURL != "https://api.openai.com/v1" {
+		t.Errorf("BaseURL = %q", cfg.LLM.BaseURL)
 	}
 }
 

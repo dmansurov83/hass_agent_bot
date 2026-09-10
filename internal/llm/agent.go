@@ -25,16 +25,16 @@ type Scheduler interface {
 }
 
 type Agent struct {
-	llm  *GigaChatClient
-	mcp  *hamcp.Client
+	llm   LLMClient
+	mcp   *hamcp.Client
 	sched Scheduler
-	log  *slog.Logger
+	log   *slog.Logger
 
 	mu      sync.Mutex
 	history []Message
 }
 
-func NewAgent(llm *GigaChatClient, mcpCli *hamcp.Client, sched Scheduler) *Agent {
+func NewAgent(llm LLMClient, mcpCli *hamcp.Client, sched Scheduler) *Agent {
 	return &Agent{
 		llm:   llm,
 		mcp:   mcpCli,

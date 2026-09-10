@@ -22,49 +22,6 @@ const (
 	tokenTTL       = 30 * time.Minute
 )
 
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type FunctionCall struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
-}
-
-type Choice struct {
-	Message struct {
-		Role         string        `json:"role"`
-		Content      string        `json:"content"`
-		FunctionCall *FunctionCall `json:"function_call,omitempty"`
-	} `json:"message"`
-	FinishReason string `json:"finish_reason"`
-}
-
-type ChatResponse struct {
-	Choices []Choice `json:"choices"`
-	Usage   struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
-}
-
-type Function struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
-}
-
-// FunctionParameters is a helper to build JSON Schema parameters.
-func FunctionParameters(props map[string]any, required []string) map[string]any {
-	return map[string]any{
-		"type":       "object",
-		"properties": props,
-		"required":   required,
-	}
-}
-
 // GigaChatClient is a thin HTTP client for the GigaChat REST API.
 type GigaChatClient struct {
 	http        *http.Client
@@ -77,15 +34,6 @@ type GigaChatClient struct {
 	mu       sync.Mutex
 	token    string
 	expires  time.Time
-}
-
-type Options struct {
-	BaseURL     string // default https://api.giga.chat
-	AuthURL     string // default legacy OAuth endpoint
-	Credentials string // Authorization Key (Basic)
-	Model       string // default GigaChat-Pro
-	Logger      *slog.Logger
-	HTTPClient  *http.Client
 }
 
 func NewGigaChatClient(opts Options) (*GigaChatClient, error) {

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -36,7 +37,8 @@ func (a *App) Run() error {
 
 	a.logger.Info("hass-agent-bot starting...",
 		"ha_url", a.cfg.HA.URL,
-		"model", a.cfg.GigaChat.Model,
+		"llm_provider", a.cfg.LLM.Provider,
+		"model", a.cfg.LLM.Model,
 	)
 
 	// Connect to HA via MCP
@@ -51,14 +53,10 @@ func (a *App) Run() error {
 	a.mcp = mcpCli
 	defer mcpCli.Close()
 
-	// Init GigaChat client
-	gigaClient, err := llm.NewGigaChatClient(llm.Options{
-		Credentials: a.cfg.GigaChat.Credentials,
-		Model:       a.cfg.GigaChat.Model,
-		Logger:      a.logger,
-	})
+	// Init LLM client (provider chosen from config)
+	llmClient, err := newLLMClient(&a.cfg.LLM, a.logger)
 	if err != nil {
-		a.logger.Error("failed to create GigaChat client", "error", err)
+		a.logger.Error("failed to create LLM client", "provider", a.cfg.LLM.Provider, "error", err)
 		return err
 	}
 
@@ -74,7 +72,7 @@ func (a *App) Run() error {
 	go sched.Run(ctx)
 
 	// LLM agent
-	agent := llm.NewAgent(gigaClient, mcpCli, sched)
+	agent := llm.NewAgent(llmClient, mcpCli, sched)
 
 	// Notifications engine
 	nf := notify.New(
@@ -132,5 +130,26 @@ func normalizeArgs(args map[string]any) {
 		if v, ok := args[key].(string); ok && v != "" {
 			args[key] = []string{v}
 		}
+	}
+}
+
+// newLLMClient создаёт LLM-клиент по конфигурации провайдера.
+func newLLMClient(cfg *config.LLMConfig, log *slog.Logger) (llm.LLMClient, error) {
+	switch cfg.Provider {
+	case "gigachat":
+		return llm.NewGigaChatClient(llm.Options{
+			Credentials: cfg.Credentials,
+			Model:       cfg.Model,
+			Logger:      log,
+		})
+	case "openai":
+		return llm.NewOpenAIClient(llm.Options{
+			BaseURL:     cfg.BaseURL,
+			Credentials: cfg.Credentials,
+			Model:       cfg.Model,
+			Logger:      log,
+		})
+	default:
+		return nil, fmt.Errorf("unknown llm provider: %s (supported: gigachat, openai)", cfg.Provider)
 	}
 }

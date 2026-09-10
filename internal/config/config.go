@@ -10,12 +10,12 @@ import (
 )
 
 type Config struct {
-	Version  string // версия приложения (для docker-тегов и логов)
-	HA       HAConfig
-	TG       TGConfig
-	GigaChat GigaChatConfig
-	Notify   NotifyConfig
-	DataDir  string // директория для персистентности (таймеры и т.д.)
+	Version string // версия приложения (для docker-тегов и логов)
+	HA      HAConfig
+	TG      TGConfig
+	LLM     LLMConfig
+	Notify  NotifyConfig
+	DataDir string // директория для персистентности (таймеры и т.д.)
 }
 
 type HAConfig struct {
@@ -28,9 +28,11 @@ type TGConfig struct {
 	AllowUserIDs []int64
 }
 
-type GigaChatConfig struct {
-	Credentials string
+type LLMConfig struct {
+	Provider    string // gigachat | openai
 	Model       string
+	Credentials string // Basic auth для GigaChat, API key для OpenAI
+	BaseURL     string // для OpenAI-совместимых (по умолчанию api.openai.com)
 	Timeout     time.Duration
 }
 
@@ -46,9 +48,10 @@ func Load(path string) (*Config, error) {
 			URL: "http://localhost:8123",
 		},
 		TG: TGConfig{},
-		GigaChat: GigaChatConfig{
-			Model:   "GigaChat-2-Pro",
-			Timeout: 30 * time.Second,
+		LLM: LLMConfig{
+			Provider: "gigachat",
+			Model:    "GigaChat-2-Pro",
+			Timeout:  30 * time.Second,
 		},
 		Notify: NotifyConfig{
 			DebounceSeconds: 30,
@@ -93,11 +96,17 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("TG_TOKEN"); v != "" {
 		cfg.TG.Token = v
 	}
-	if v := os.Getenv("GIGACHAT_CREDENTIALS"); v != "" {
-		cfg.GigaChat.Credentials = v
+	if v := os.Getenv("LLM_PROVIDER"); v != "" {
+		cfg.LLM.Provider = v
 	}
-	if v := os.Getenv("GIGACHAT_MODEL"); v != "" {
-		cfg.GigaChat.Model = v
+	if v := os.Getenv("LLM_CREDENTIALS"); v != "" {
+		cfg.LLM.Credentials = v
+	}
+	if v := os.Getenv("LLM_MODEL"); v != "" {
+		cfg.LLM.Model = v
+	}
+	if v := os.Getenv("LLM_BASE_URL"); v != "" {
+		cfg.LLM.BaseURL = v
 	}
 	if v := os.Getenv("ALLOW_USERS"); v != "" {
 		cfg.TG.AllowUserIDs = parseIDs(v)
