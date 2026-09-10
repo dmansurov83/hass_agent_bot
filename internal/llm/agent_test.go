@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,7 +86,7 @@ func TestAgent_HandleMessage_ToolCall(t *testing.T) {
 		t.Fatalf("giga client: %v", err)
 	}
 
-	agent := NewAgent(gigaCli, ha, &fakeScheduler{}, nil)
+	agent := NewAgent(gigaCli, ha, &fakeScheduler{}, nil, nil)
 	reply, err := agent.HandleMessage(WithChatID(context.Background(), 100), "включи свет в зале")
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
@@ -121,7 +122,7 @@ func TestAgent_HandleMessage_NoToolCall(t *testing.T) {
 		t.Fatalf("giga client: %v", err)
 	}
 
-	agent := NewAgent(gigaCli, ha, &fakeScheduler{}, nil)
+	agent := NewAgent(gigaCli, ha, &fakeScheduler{}, nil, nil)
 	reply, err := agent.HandleMessage(WithChatID(context.Background(), 100), "привет")
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
@@ -132,7 +133,7 @@ func TestAgent_HandleMessage_NoToolCall(t *testing.T) {
 }
 
 func TestAgent_Reset(t *testing.T) {
-	agent := NewAgent(nil, nil, nil, nil)
+	agent := NewAgent(nil, nil, nil, nil, nil)
 	agent.histories[100] = []Message{{Role: "user", Content: "foo"}}
 	agent.Reset(100)
 	if len(agent.histories[100]) != 0 {
@@ -149,7 +150,7 @@ func TestAgent_Reset_Persisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileStore: %v", err)
 	}
-	agent := NewAgent(nil, nil, nil, store)
+	agent := NewAgent(nil, nil, nil, store, nil)
 	agent.histories[100] = []Message{{Role: "user", Content: "foo"}, {Role: "assistant", Content: "bar"}}
 	agent.saveHistory(100)
 
@@ -248,7 +249,7 @@ func TestAgent_GetWeather(t *testing.T) {
 	t.Cleanup(haREST.Close)
 
 	ha := hare.New(haREST.URL, hare.Options{Token: "test-token"})
-	agent := NewAgent(nil, ha, nil, nil)
+	agent := NewAgent(nil, ha, nil, nil, nil)
 	result, err := agent.getWeather(context.Background(), map[string]any{"hours": 2.0})
 	if err != nil {
 		t.Fatalf("getWeather: %v", err)
@@ -275,7 +276,7 @@ func TestAgent_GetWeather_NoEntity(t *testing.T) {
 	t.Cleanup(haREST.Close)
 
 	ha := hare.New(haREST.URL, hare.Options{Token: "test-token"})
-	agent := NewAgent(nil, ha, nil, nil)
+	agent := NewAgent(nil, ha, nil, nil, nil)
 	result, err := agent.getWeather(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("getWeather: %v", err)
@@ -344,6 +345,225 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestMemoryStore_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileMemoryStore(dir, nil)
+	if err != nil {
+		t.Fatalf("NewFileMemoryStore: %v", err)
+	}
+	defer store.Close()
+
+	m := Memory{ChatID: 42, Category: "preference", Text: "Свет в спальне всегда выключать в 23:00"}
+	if err := store.Add(context.Background(), &m); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if m.ID == "" {
+		t.Error("expected an ID assigned")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mem_42.json")); err != nil {
+		t.Fatalf("memory file not written: %v", err)
+	}
+
+	mems, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := mems[42]
+	if len(got) != 1 || got[0].Text != "Свет в спальне всегда выключать в 23:00" || got[0].ChatID != 42 {
+		t.Errorf("roundtrip mismatch: %+v", got)
+	}
+}
+
+func TestMemoryStore_Dedup(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileMemoryStore(dir, nil)
+	if err != nil {
+		t.Fatalf("NewFileMemoryStore: %v", err)
+	}
+	defer store.Close()
+
+	m1 := Memory{ChatID: 42, Category: "preference", Text: "Свет в спальне всегда выключать в 23:00"}
+	if err := store.Add(context.Background(), &m1); err != nil {
+		t.Fatalf("Add 1: %v", err)
+	}
+	firstID := m1.ID
+
+	m2 := Memory{ChatID: 42, Category: "preference", Text: "свет в спальне всегда выключать в 23:00"}
+	if err := store.Add(context.Background(), &m2); err != nil {
+		t.Fatalf("Add 2: %v", err)
+	}
+
+	mems, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := mems[42]
+	if len(got) != 1 {
+		t.Fatalf("expected dedup to 1, got %d: %+v", len(got), got)
+	}
+	if got[0].ID != firstID {
+		t.Errorf("expected same ID after dedup, got %s != %s", got[0].ID, firstID)
+	}
+}
+
+func TestMemoryStore_Delete(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileMemoryStore(dir, nil)
+	if err != nil {
+		t.Fatalf("NewFileMemoryStore: %v", err)
+	}
+	defer store.Close()
+
+	m := Memory{ChatID: 42, Text: "Имя пользователя — Иван"}
+	if err := store.Add(context.Background(), &m); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := store.Delete(context.Background(), 42, m.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "mem_42.json")); !os.IsNotExist(err) {
+		t.Errorf("memory file should be removed when empty")
+	}
+	mems, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(mems) != 0 {
+		t.Errorf("expected empty after delete, got %+v", mems)
+	}
+}
+
+func TestMemoryStore_PerChatFiles(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileMemoryStore(dir, nil)
+	if err != nil {
+		t.Fatalf("NewFileMemoryStore: %v", err)
+	}
+	defer store.Close()
+
+	m1 := Memory{ChatID: 42, Text: "Факт чата 42"}
+	if err := store.Add(context.Background(), &m1); err != nil {
+		t.Fatalf("Add 42: %v", err)
+	}
+	m2 := Memory{ChatID: 43, Text: "Факт чата 43"}
+	if err := store.Add(context.Background(), &m2); err != nil {
+		t.Fatalf("Add 43: %v", err)
+	}
+
+	for _, id := range []string{"mem_42.json", "mem_43.json"} {
+		if _, err := os.Stat(filepath.Join(dir, id)); err != nil {
+			t.Fatalf("file %s not written: %v", id, err)
+		}
+	}
+
+	mems, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(mems) != 2 || len(mems[42]) != 1 || len(mems[43]) != 1 {
+		t.Errorf("unexpected map: %+v", mems)
+	}
+
+	// deleting from chat 42 must not touch chat 43
+	if err := store.Delete(context.Background(), 42, m1.ID); err != nil {
+		t.Fatalf("Delete 42: %v", err)
+	}
+	mems, err = store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(mems[43]) != 1 {
+		t.Errorf("chat 43 memory lost: %+v", mems)
+	}
+}
+
+func TestAgent_MemoryTools(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileMemoryStore(dir, nil)
+	if err != nil {
+		t.Fatalf("NewFileMemoryStore: %v", err)
+	}
+	defer store.Close()
+
+	agent := NewAgent(nil, nil, nil, nil, store)
+	ctx := WithChatID(context.Background(), 100)
+
+	res, err := agent.handleRemember(ctx, map[string]any{"text": "Пользователя зовут Иван", "category": "user"})
+	if err != nil {
+		t.Fatalf("remember: %v", err)
+	}
+	if !stringsContains(res, "Иван") {
+		t.Errorf("remember reply: %q", res)
+	}
+
+	res, err = agent.handleRecall(ctx, map[string]any{"query": "Иван"})
+	if err != nil {
+		t.Fatalf("recall: %v", err)
+	}
+	if !stringsContains(res, "Иван") || !stringsContains(res, "mem_") {
+		t.Errorf("recall reply: %q", res)
+	}
+
+	// isolation: another chat must not see this memory
+	other := WithChatID(context.Background(), 200)
+	res, err = agent.handleRecall(other, map[string]any{})
+	if err != nil {
+		t.Fatalf("recall other: %v", err)
+	}
+	if !stringsContains(res, "ничего нет") {
+		t.Errorf("expected empty memory for other chat, got %q", res)
+	}
+
+	// forget by ID extracted from recall
+	res, err = agent.handleRecall(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("recall all: %v", err)
+	}
+	id := strings.TrimPrefix(strings.SplitN(strings.TrimPrefix(res, "["), "]", 2)[0], "[")
+	if id == "" {
+		t.Fatalf("could not parse id from recall: %q", res)
+	}
+	res, err = agent.handleForget(ctx, map[string]any{"id": id})
+	if err != nil {
+		t.Fatalf("forget: %v", err)
+	}
+	if !stringsContains(res, "Забыл") {
+		t.Errorf("forget reply: %q", res)
+	}
+
+	res, err = agent.handleRecall(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("recall after forget: %v", err)
+	}
+	if !stringsContains(res, "ничего нет") {
+		t.Errorf("expected empty memory after forget, got %q", res)
+	}
+}
+
+func TestAgent_MemoryBlockInject(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileMemoryStore(dir, nil)
+	if err != nil {
+		t.Fatalf("NewFileMemoryStore: %v", err)
+	}
+	defer store.Close()
+
+	agent := NewAgent(nil, nil, nil, nil, store)
+	ctx := WithChatID(context.Background(), 100)
+	if _, err := agent.handleRemember(ctx, map[string]any{"text": "Любимая температура 24°C", "category": "preference"}); err != nil {
+		t.Fatalf("remember: %v", err)
+	}
+
+	block := agent.memoryBlock(100)
+	if block == "" || !stringsContains(block, "24") {
+		t.Errorf("memory block not injected: %q", block)
+	}
+	// other chat must not see it
+	if other := agent.memoryBlock(200); other != "" {
+		t.Errorf("other chat sees memory: %q", other)
+	}
 }
 
 func TestParseAtTime(t *testing.T) {

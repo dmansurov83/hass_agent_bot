@@ -60,13 +60,13 @@ func ListSensorsFunction() Function {
 // LiveContextFunction returns the definition for the live-context tool.
 func LiveContextFunction() Function {
 	return Function{
-		Name: "GetLiveContext",
+		Name:        "GetLiveContext",
 		Description: "Получить ТЕКУЩЕЕ состояние ВСЕХ устройств, датчиков, областей: сенсоры (sensor.*), свет, выключатели, климат, медиа, счётчики — с их entity_id. Вызывай без аргументов для полного списка или с name/domain/area для фильтрации. Показывает ВСЕ сущности HA, включая не экспонированные в Assist.",
 		Parameters: FunctionParameters(
 			map[string]any{
-				"name": map[string]any{"type": "string", "description": "Фильтр по названию устройства или alias (без учёта регистра)."},
+				"name":   map[string]any{"type": "string", "description": "Фильтр по названию устройства или alias (без учёта регистра)."},
 				"domain": map[string]any{"type": "string", "description": "Фильтр по домену (light, sensor, switch, ...)."},
-				"area": map[string]any{"type": "string", "description": "Фильтр по зоне (название или alias)."},
+				"area":   map[string]any{"type": "string", "description": "Фильтр по зоне (название или alias)."},
 			},
 			nil,
 		),
@@ -80,9 +80,9 @@ func turnOnOffFunction(name, desc string) Function {
 		Description: desc,
 		Parameters: FunctionParameters(
 			map[string]any{
-				"name": map[string]any{"type": "string", "description": "Название устройства из GetLiveContext (friendly name или entity_id, например 'Свет в зале' или light.living_room). Не выдумывай!"},
-				"area": map[string]any{"type": "string", "description": "Зона/комната (например 'Гостиная', 'Туалет'). Включит все устройства в зоне."},
-				"domain": map[string]any{"type": "string", "description": "Домен устройств (light, switch, fan, ...) — применить ко всем таким устройствам."},
+				"name":         map[string]any{"type": "string", "description": "Название устройства из GetLiveContext (friendly name или entity_id, например 'Свет в зале' или light.living_room). Не выдумывай!"},
+				"area":         map[string]any{"type": "string", "description": "Зона/комната (например 'Гостиная', 'Туалет'). Включит все устройства в зоне."},
+				"domain":       map[string]any{"type": "string", "description": "Домен устройств (light, switch, fan, ...) — применить ко всем таким устройствам."},
 				"device_class": map[string]any{"type": "string", "description": "device_class (switch, outlet, ...) — применить ко всем с таким классом."},
 			},
 			nil,
@@ -104,10 +104,10 @@ func LightSetFunction() Function {
 		Description: "Установить яркость (%) или цвет света. Сначала GetLiveContext, чтобы узнать devices.",
 		Parameters: FunctionParameters(
 			map[string]any{
-				"name": map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
-				"area": map[string]any{"type": "string", "description": "Зона/комната."},
-				"brightness": map[string]any{"type": "integer", "description": "Яркость 0-100%."},
-				"color": map[string]any{"type": "string", "description": "Цвет (например 'red', 'warm white')."},
+				"name":        map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
+				"area":        map[string]any{"type": "string", "description": "Зона/комната."},
+				"brightness":  map[string]any{"type": "integer", "description": "Яркость 0-100%."},
+				"color":       map[string]any{"type": "string", "description": "Цвет (например 'red', 'warm white')."},
 				"temperature": map[string]any{"type": "integer", "description": "Цветовая температура в Кельвинах."},
 			},
 			nil,
@@ -121,8 +121,8 @@ func ClimateFunction() Function {
 		Description: "Установить целевую температуру климата/термостата.",
 		Parameters: FunctionParameters(
 			map[string]any{
-				"name": map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
-				"area": map[string]any{"type": "string", "description": "Зона/комната."},
+				"name":        map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
+				"area":        map[string]any{"type": "string", "description": "Зона/комната."},
 				"temperature": map[string]any{"type": "number", "description": "Целевая температура в °C."},
 			},
 			[]string{"temperature"},
@@ -136,8 +136,8 @@ func VolumeFunction() Function {
 		Description: "Установить громкость медиа-плеера (0-100%).",
 		Parameters: FunctionParameters(
 			map[string]any{
-				"name": map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
-				"area": map[string]any{"type": "string", "description": "Зона/комната."},
+				"name":         map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
+				"area":         map[string]any{"type": "string", "description": "Зона/комната."},
 				"volume_level": map[string]any{"type": "integer", "description": "Громкость 0-100%."},
 			},
 			nil,
@@ -151,8 +151,8 @@ func VolumeRelativeFunction() Function {
 		Description: "Увеличить или уменьшить громкость медиа-плеера.",
 		Parameters: FunctionParameters(
 			map[string]any{
-				"name": map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
-				"area": map[string]any{"type": "string", "description": "Зона/комната."},
+				"name":        map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
+				"area":        map[string]any{"type": "string", "description": "Зона/комната."},
 				"volume_step": map[string]any{"type": "string", "description": "Направление: 'up' или 'down'."},
 			},
 			nil,
@@ -160,10 +160,18 @@ func VolumeRelativeFunction() Function {
 	}
 }
 
-func MediaPauseFunction() Function { return mediaCtrlFunction("HassMediaPause", "Поставить медиа-плеер на паузу.") }
-func MediaUnpauseFunction() Function { return mediaCtrlFunction("HassMediaUnpause", "Возобновить воспроизведение медиа-плеера.") }
-func MediaNextFunction() Function { return mediaCtrlFunction("HassMediaNext", "Переключить медиа-плеер на следующий трек.") }
-func MediaPreviousFunction() Function { return mediaCtrlFunction("HassMediaPrevious", "Переключить медиа-плеер на предыдущий трек.") }
+func MediaPauseFunction() Function {
+	return mediaCtrlFunction("HassMediaPause", "Поставить медиа-плеер на паузу.")
+}
+func MediaUnpauseFunction() Function {
+	return mediaCtrlFunction("HassMediaUnpause", "Возобновить воспроизведение медиа-плеера.")
+}
+func MediaNextFunction() Function {
+	return mediaCtrlFunction("HassMediaNext", "Переключить медиа-плеер на следующий трек.")
+}
+func MediaPreviousFunction() Function {
+	return mediaCtrlFunction("HassMediaPrevious", "Переключить медиа-плеер на предыдущий трек.")
+}
 
 func mediaCtrlFunction(name, desc string) Function {
 	return Function{
@@ -213,8 +221,8 @@ func SearchPlayFunction() Function {
 		Description: "Найти медиа (музыку, подкаст) и воспроизвести на медиа-плеере.",
 		Parameters: FunctionParameters(
 			map[string]any{
-				"name": map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
-				"area": map[string]any{"type": "string", "description": "Зона/комната."},
+				"name":         map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
+				"area":         map[string]any{"type": "string", "description": "Зона/комната."},
 				"search_query": map[string]any{"type": "string", "description": "Поисковый запрос (исполнитель, трек)."},
 			},
 			nil,
@@ -228,8 +236,8 @@ func FanSetSpeedFunction() Function {
 		Description: "Установить скорость вентилятора в процентах (0-100).",
 		Parameters: FunctionParameters(
 			map[string]any{
-				"name": map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
-				"area": map[string]any{"type": "string", "description": "Зона/комната."},
+				"name":       map[string]any{"type": "string", "description": "Название устройства из GetLiveContext."},
+				"area":       map[string]any{"type": "string", "description": "Зона/комната."},
 				"percentage": map[string]any{"type": "integer", "description": "Скорость 0-100%."},
 			},
 			nil,
@@ -254,7 +262,7 @@ func CancelTimersFunction() Function {
 	return Function{
 		Name:        "HassCancelAllTimers",
 		Description: "Отменить все активные таймеры и расписания.",
-		Parameters: FunctionParameters(map[string]any{}, nil),
+		Parameters:  FunctionParameters(map[string]any{}, nil),
 	}
 }
 
@@ -344,6 +352,61 @@ func SchedulerAIFunction() Function {
 	}
 }
 
+// RememberFunction returns the definition for saving a memory.
+func RememberFunction() Function {
+	return Function{
+		Name:        "remember",
+		Description: "Запомнить важный факт или предпочтение пользователя навсегда (переживает перезапуск). Вызывай, когда пользователь просит «запомни…», «всегда делай так…», «не забывай…», или когда в разговоре раскрыт важный устойчивый факт: имя, привычка, распорядок, настройка дома, любимое/нелюбимое, предпочтения по управлению домом, порядок действий. Сохраняй один факт за вызов, формулируй кратко и однозначно (1-2 предложения). Если такой факт уже запоминался — он заменится.",
+		Parameters: FunctionParameters(
+			map[string]any{
+				"text": map[string]any{
+					"type":        "string",
+					"description": "Текст факта, например «Пользователя зовут Иван», «Свет в спальне всегда выключать в 23:00», «Любимая температура в гостиной 24°C».",
+				},
+				"category": map[string]any{
+					"type":        "string",
+					"description": "Категория (необязательно): user (о пользователе), preference (предпочтение/правило «всегда так»), habit (привычка), fact (факт), other.",
+				},
+			},
+			[]string{"text"},
+		),
+	}
+}
+
+// RecallFunction returns the definition for reading memories.
+func RecallFunction() Function {
+	return Function{
+		Name:        "recall",
+		Description: "Найти запомненные ранее факты и предпочтения по ключевым словам (имя пользователя, привычки, правила, настройки, «что я запоминал»). Вызывай, когда нужно вспомнить что-то из памяти, проверить предпочтения перед действием, или когда пользователь спрашивает «что ты обо мне знаешь», «что я просил запомнить». Без query вернёт всю память.",
+		Parameters: FunctionParameters(
+			map[string]any{
+				"query": map[string]any{
+					"type":        "string",
+					"description": "Ключевые слова для поиска (необязательно). Пусто — вся память.",
+				},
+			},
+			nil,
+		),
+	}
+}
+
+// ForgetFunction returns the definition for deleting a memory.
+func ForgetFunction() Function {
+	return Function{
+		Name:        "forget",
+		Description: "Удалить запомненный факт полностью. Вызывай, когда пользователь просит «забудь…», «удали из памяти…», «не надо это помнить». Сначала вызови recall, чтобы получить ID факта.",
+		Parameters: FunctionParameters(
+			map[string]any{
+				"id": map[string]any{
+					"type":        "string",
+					"description": "ID памяти из recall (например mem_3).",
+				},
+			},
+			[]string{"id"},
+		),
+	}
+}
+
 // HAOnlyFunctions returns only HA tools (no scheduler tools). Used during
 // background AI task execution where scheduling is not allowed.
 func HAOnlyFunctions() []Function {
@@ -364,11 +427,13 @@ func HAOnlyFunctions() []Function {
 		FanSetSpeedFunction(),
 		BroadcastFunction(),
 		CancelTimersFunction(),
-		DateTimeFunction(),
 		LiveContextFunction(),
 		WeatherFunction(),
 		HistoryFunction(),
 		ListSensorsFunction(),
+		RememberFunction(),
+		RecallFunction(),
+		ForgetFunction(),
 	}
 }
 
@@ -398,37 +463,54 @@ func SystemPrompt() Message {
 - HassBroadcast — озвучить сообщение через умный дом (колонки/динамики). Только для голосового объявления в доме, НЕ для ответа в чат!
 - HassCancelAllTimers — отменить все таймеры
 - GetLiveContext — получить ТЕКУЩЕЕ состояние ВСЕХ устройств, датчиков, областей: сенсоры (sensor.*), свет, выключатели, климат, медиа, счётчики — с их entity_id. Вызывай без аргументов для полного списка или с name/domain/area для фильтрации. Показывает ВСЕ сущности HA, включая не экспонированные в Assist.
-- GetDateTime — текущие дата и время
 - HassGetWeather — погода и прогноз (температура, ветер, осадки) через Home Assistant
-- HassGetHistory — история и статистика сущностей: потребление электроэнергии/газа/воды за день/неделю/месяц/год, расход, показания счётчиков, температура за период (entity — id сущности или название из GetLiveContext, period — day/week/month/year, aggregate — sum/mean/min/max/latest/raw)
+- HassGetHistory — история и статистика сущностей за период: потребление электроэнергии/газа/воды за день/неделю/месяц/год, расход, показания счётчиков (entity — id сущности или название из GetLiveContext, period — day/week/month/year, aggregate — sum/mean/min/max/latest/raw). ТОЛЬКО для данных за период, НЕ для текущих показаний!
 - HassListSensors — список ВСЕХ сенсоров (sensor.*) с текущими значениями: мощность, напряжение, счётчики энергии, температура, влажность и т.д. Вызывай, когда пользователь просит «покажи все датчики/сенсоры/значения»
 - schedule_action — запланировать действие в будущем (at — одноразово в время HH:MM, delay — через N минут, cron — по расписанию)
 - schedule_ai_action — запланировать ФОНОВУЮ AI-задачу: в заданное время ты сам проверишь состояние дома и пришлёшь результат в чат (поле prompt — что проверить и при каком условии писать)
+- remember — запомнить факт/предпочтение навсегда (text — что запомнить, category — user/preference/habit/fact)
+- recall — вспомнить запомненные факты (query — ключевые слова, пусто — вся память)
+- forget — удалить запомненный факт (id — из recall)
+
+Память:
+11. Обязательно вызывай remember, когда: пользователь явно просит «запомни…», «всегда делай так…», «не забывай…»; либо в разговоре раскрыт устойчивый важный факт (имя, привычка, распорядок, предпочтение по дому, как обращаться). Сохраняй один факт за вызов, кратко и однозначно.
+12. ВСЕГДА в начале каждого диалога вызывай recall (без query) — посмотри что запомнено. Перед любым действием (включением, установкой температуры, ответом на вопрос) проверь предпочтения через recall — если пользователь просил «всегда так», следуй этому.
+13. Если пользователь спрашивает «что ты обо мне знаешь», «что запомнил» — вызови recall и расскажи.
+14. Если пользователь просит «забудь» — вызови recall, найди ID и вызови forget.
 
 Правила:
 1. Отвечай кратко и понятно на русском, одним-двумя предложениями.
-2. Имена устройств в Home Assistant — ТЕХНИЧЕСКИЕ. В ответе GetLiveContext есть поле "names" (человеческое название) и "entity_id" (техническое). НИКОГДА не выдумывай имена!
-3. ВСЕГДА сначала вызывай GetLiveContext, чтобы узнать точные имена и entity_id. Никогда не угадывай name.
-4. GetLiveContext возвращает ВСЕ экспонированные сущности HA, включая сенсоры (sensor.*), выключатели, свет, климат, медиа-плееры, счётчики энергии и т.д. Если пользователь просит «покажи все устройства» или «список всех сенсоров/датчиков» — вызови GetLiveContext без аргументов и перечисли все sensor.* сущности с их состояниями. Не придумывай ограничения, что ты видишь «только температуру и влажность» — ты видишь всё, что HA отдаёт через REST.
-5. Включать/выключать можно ТРЕМЯ способами:
+2. Выбор инструмента по вопросу:
+   - «сколько градусов/какая температура дома/в комнате/в квартире» (внутри) → GetLiveContext или HassListSensors (текущие значения сенсоров)
+   - «погода на улице/на улице/за окном/прогноз» (снаружи) → HassGetWeather
+   - «сколько потрачено/расход/история/показания за период» → HassGetHistory
+   - список всех датчиков/сенсоров → HassListSensors
+   Текущие дата и время уже указаны в системном промпте — НЕ запрашивай их отдельно!
+3. Если результат вызванного инструмента не отвечает на вопрос пользователя — не вызывай его повторно, а вызови другой подходящий инструмент.
+4. На ВОПРОСЫ о состоянии НЕ вызывай записывающие инструменты (HassTurnOn/HassTurnOff/HassClimateSetTemperature/HassLightSet/HassSetVolume/HassFanSetSpeed и т.п.) — только читающие: GetLiveContext, HassListSensors, HassGetWeather, HassGetHistory. Например, на «сколько градусов дома?» НИКОГДА не вызывай HassClimateSetTemperature!
+5. Имена устройств в Home Assistant — ТЕХНИЧЕСКИЕ. В ответе GetLiveContext есть поле "names" (человеческое название) и "entity_id" (техническое). НИКОГДА не выдумывай имена!
+6. ВСЕГДА сначала вызывай GetLiveContext, чтобы узнать точные имена и entity_id. Никогда не угадывай name.
+7. GetLiveContext возвращает ВСЕ экспонированные сущности HA, включая сенсоры (sensor.*), выключатели, свет, климат, медиа-плееры, счётчики энергии и т.д. Если пользователь просит «покажи все устройства» или «список всех сенсоров/датчиков» — вызови GetLiveContext без аргументов и перечисли все sensor.* сущности с их состояниями. Не придумывай ограничения, что ты видишь «только температуру и влажность» — ты видишь всё, что HA отдаёт через REST.
+8. Включать/выключать можно ТРЕМЯ способами:
    a) По area (зона) — HassTurnOn с полем area, без name. Включит ВСЕ устройства в зоне.
    b) По точному name или entity_id из GetLiveContext — HassTurnOn с name.
    c) По domain — например HassTurnOn с domain "light".
-6. Примеры правильного вызова HassTurnOn:
+9. Примеры правильного вызова HassTurnOn:
    - {"name": "Свет в зале"} или {"name": "light.living_room"} — конкретное устройство
    - {"area": "Гостиная"} — все устройства в зоне
-7. Не придумывай результаты — полагайся на ответ инструментов. Если инструмент вернул ошибку — честно скажи об этом.
-8. Для отложенных действий используй schedule_action с плоскими полями:
+10. Не придумывай результаты — полагайся на ответ инструментов. Если инструмент вернул ошибку — честно скажи об этом.
+11. Для отложенных действий используй schedule_action с плоскими полями:
    - "в 10:05" (одноразово) → поле at: "10:05", БЕЗ cron!
    - "через 15 минут" → поле delay: "15m"
    - "каждый день в 7:00" / "по будням в 7:00" (повторение) → поле cron: "0 0 7 * * *" / "0 0 7 * * 1-5" (с секундами)
    Пример одноразового: {"tool":"HassTurnOff","area":"Комната 1","at":"10:05","label":"Выключить свет в комнате 1"} + tool-параметры (name/area/domain).
    Пример cron: {"tool":"HassTurnOff","name":"Light","cron":"0 0 7 * * 1-5","label":"Выключить свет по будням в 7:00"}.
-9. Для фоновой задачи, где нужно САМОМУ подумать и написать в чат (рассказать, проверить, напомнить, прислать сводку) — используй schedule_ai_action с полем prompt, повторяющим просьбу пользователя:
+12. Для фоновой задачи, где нужно САМОМУ подумать и написать в чат (рассказать, проверить, напомнить, прислать сводку) — используй schedule_ai_action с полем prompt, повторяющим просьбу пользователя:
    Пример: {"prompt":"проверь заряд батарей всех датчиков, напиши если какой-то ниже 20%","cron":"0 0 7 * * *","label":"Проверка батарей"}
    Пример: {"prompt":"расскажи мне анекдот","delay":"1m","label":"Анекдот"}
    Пример: {"prompt":"напомни выключить чайник","at":"18:30","label":"Напоминание"}
    НИКОГДА не используй HassBroadcast для ответа в чат — он только озвучивает через колонки.
-10. Если пользователь не указал, какое именно устройство — уточни. Никогда не придумывай name самостоятельно.`,
+13. Если пользователь не указал, какое именно устройство — уточни. Никогда не придумывай name самостоятельно.
+14. НИКОГДА не пиши в тексте ответа «Calling function...», «Вызываю...», JSON инструментов или описание вызова. Инструменты вызываются автоматически механизмом function_call — просто вызови нужный инструмент настоящим вызовом. Текст ответа — только то, что ты говоришь пользователю.`,
 	}
 }

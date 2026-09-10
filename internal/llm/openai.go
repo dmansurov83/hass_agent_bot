@@ -74,11 +74,14 @@ func NewOpenAIClient(opts Options) (*OpenAIClient, error) {
 }
 
 // Chat sends a chat completion request. Functions (if any) are translated into
-// OpenAI "tools" and the response is normalized to ChatResponse.
+// OpenAI "tools" and the response is normalized to ChatResponse. Messages are
+// normalized from the internal (GigaChat-style) protocol to OpenAI's wire
+// format: assistant messages carrying a function_call become "tool_calls",
+// and Role="function" results become Role="tool".
 func (c *OpenAIClient) Chat(ctx context.Context, messages []Message, functions []Function) (*ChatResponse, error) {
 	payload := map[string]any{
 		"model":       c.model,
-		"messages":    messages,
+		"messages":    toOpenAIMessages(messages),
 		"temperature": 0.2,
 	}
 	if len(functions) > 0 {
@@ -143,6 +146,53 @@ func toOpenAITools(functions []Function) []openAITool {
 		tools = append(tools, openAITool{Type: "function", Function: f})
 	}
 	return tools
+}
+
+// toOpenAIMessages converts internal messages to the OpenAI wire format.
+// Our agent loop passes assistant messages that include the requested
+// function_call, followed by a "function" result message. OpenAI expects
+// "tool_calls" on the assistant message and a "tool" role for the result;
+// we translate those (including a stable tool_call_id) here. Plain
+// system/user/assistant messages pass through untouched.
+func toOpenAIMessages(messages []Message) []map[string]any {
+	out := make([]map[string]any, 0, len(messages))
+	toolCallSeq := 0
+	for _, m := range messages {
+		msg := map[string]any{"role": m.Role, "content": m.Content}
+
+		switch m.Role {
+		case "assistant":
+			if m.FunctionCall != nil {
+				toolCallSeq++
+				msg["tool_calls"] = []map[string]any{{
+					"id":   fmt.Sprintf("call_%d", toolCallSeq),
+					"type": "function",
+					"function": map[string]any{
+						"name":      m.FunctionCall.Name,
+						"arguments": mustJSON(m.FunctionCall.Arguments),
+					},
+				}}
+			}
+
+		case "function":
+			msg["role"] = "tool"
+			msg["tool_call_id"] = fmt.Sprintf("call_%d", toolCallSeq)
+			if m.Name != "" {
+				msg["name"] = m.Name
+			}
+		}
+
+		out = append(out, msg)
+	}
+	return out
+}
+
+func mustJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 type openAIResponse struct {

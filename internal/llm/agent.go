@@ -91,9 +91,10 @@ type Agent struct {
 	mu        sync.Mutex
 	histories map[int64][]Message // chatID → messages (in-memory cache)
 	store     HistoryStore        // persistence (nil = don't save)
+	memory    MemoryStore         // durable memory (nil = disabled)
 }
 
-func NewAgent(llm LLMClient, ha HAClient, sched Scheduler, store HistoryStore) *Agent {
+func NewAgent(llm LLMClient, ha HAClient, sched Scheduler, store HistoryStore, mem MemoryStore) *Agent {
 	a := &Agent{
 		llm:       llm,
 		ha:        ha,
@@ -102,6 +103,7 @@ func NewAgent(llm LLMClient, ha HAClient, sched Scheduler, store HistoryStore) *
 		histories: make(map[int64][]Message),
 		index:     haIndex{byName: map[string]string{}, byArea: map[string][]string{}, stateClass: map[string]string{}, unit: map[string]string{}, friendly: map[string]string{}},
 		store:     store,
+		memory:    mem,
 	}
 	if store != nil {
 		loaded, err := store.Load(context.Background())
@@ -254,13 +256,22 @@ func (a *Agent) HandleMessage(ctx context.Context, userText string) (string, err
 	history := a.histories[chatID]
 	messages := make([]Message, 0, 2+len(history)+1)
 
+	sys := SystemPrompt().Content
+	now := time.Now()
+	sys += "\n\nТекущая дата и время: " + now.Format("02.01.2006 15:04") + " (" + now.Format("Monday") + ")"
+	if memBlock := a.memoryBlock(chatID); memBlock != "" {
+		sys += "\n\n=== Запомненное о пользователе (память) ===\n" + memBlock + "\n=== Конец памяти ==="
+	}
+
 	if taskMode {
-		messages = append(messages, Message{Role: "system", Content: SystemPrompt().Content + "\n\nВАЖНО: Это фоновое выполнение задачи. Время уже наступило. НЕ вызывай schedule_action и schedule_ai_action — просто выполни то, что просят, прямо сейчас. Не нужно ничего планировать."})
+		messages = append(messages, Message{Role: "system", Content: sys + "\n\nВАЖНО: Это фоновое выполнение задачи. Время уже наступило. НЕ вызывай schedule_action и schedule_ai_action — просто выполни то, что просят, прямо сейчас. Не нужно ничего планировать."})
 	} else {
-		messages = append(messages, SystemPrompt())
+		messages = append(messages, Message{Role: "system", Content: sys})
 	}
 	messages = append(messages, history...)
 	messages = append(messages, Message{Role: "user", Content: userText})
+
+	lastToolCalls := map[string]int{}
 
 	for i := 0; i < maxIterations; i++ {
 		resp, err := a.llm.Chat(ctx, messages, functions)
@@ -273,18 +284,54 @@ func (a *Agent) HandleMessage(ctx context.Context, userText string) (string, err
 
 		if msg.FunctionCall != nil {
 			fc := msg.FunctionCall
+
+			a.log.Debug("agent: llm wants tool",
+				"iter", i,
+				"name", fc.Name,
+				"args", fc.Arguments,
+				"state", msg.FunctionsStateID,
+			)
+
+			// Loop guard: if the model keeps asking for the exact same
+			// tool+args it already got a result for, it is going in circles.
+			// Count repeats instead of breaking on the first one — the model
+			// may legitimately retry and then switch to another tool (e.g.
+			// GetDateTime -> HassGetHistory). Break only after 3 identical
+			// calls in this turn.
+			if sig := fc.Signature(); sig != "" {
+				lastToolCalls[sig]++
+				if lastToolCalls[sig] >= 3 {
+					a.log.Warn("agent: repeated tool call, breaking loop", "name", fc.Name, "iter", i)
+					final := fmt.Sprintf("Не удалось получить ответ: модель повторно вызывает инструмент %s. Попробуй переформулировать запрос.", fc.Name)
+					return final, nil
+				}
+			}
+
+			// Correct protocol: pass the assistant's function_call back to the
+			// model and append the tool result as a Role=function message.
+			// (GigaChat: message.function_call + role "function"; OpenAI is
+			// normalized in the provider client.)
 			messages = append(messages, Message{
-				Role:    "assistant",
-				Content: fmt.Sprintf("Calling function %s", fc.Name),
+				Role:             "assistant",
+				Content:          msg.Content,
+				FunctionCall:     fc,
+				FunctionsStateID: msg.FunctionsStateID,
 			})
 
 			result, err := a.executeTool(ctx, fc)
 			if err != nil {
 				result = fmt.Sprintf("Ошибка: %v", err)
 			}
+			a.log.Info("agent: tool result",
+				"name", fc.Name,
+				"args", fc.Arguments,
+				"result", result,
+				"err", err,
+			)
 			messages = append(messages, Message{
-				Role:    "user",
-				Content: fmt.Sprintf("Результат %s: %s", fc.Name, result),
+				Role:    "function",
+				Name:    fc.Name,
+				Content: wrapToolResult(result),
 			})
 		} else {
 			final := msg.Content
@@ -321,6 +368,28 @@ func (a *Agent) saveHistory(chatID int64) {
 	if err := a.store.Save(context.Background(), chatID, msgs); err != nil {
 		a.log.Error("agent: save history", "chat_id", chatID, "error", err)
 	}
+}
+
+// memoryBlock renders the durable memories of a chat as a readable text block
+// injected into the system prompt. Empty string when memory is disabled.
+func (a *Agent) memoryBlock(chatID int64) string {
+	if a.memory == nil {
+		return ""
+	}
+	mems, err := a.memory.Load(context.Background())
+	if err != nil {
+		a.log.Warn("agent: load memory", "error", err)
+		return ""
+	}
+	var lines []string
+	for _, m := range mems[chatID] {
+		line := "- " + m.Text
+		if m.Category != "" && m.Category != "other" {
+			line = "- [" + m.Category + "] " + m.Text
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Reset clears history for a specific chat (removes from cache + store).
@@ -380,9 +449,6 @@ func (a *Agent) executeTool(ctx context.Context, fc *FunctionCall) (string, erro
 	case "HassListSensors":
 		return a.listSensors(ctxTool)
 
-	case "GetDateTime":
-		return time.Now().Format("2006-01-02 15:04:05 (Monday, 02.01.2006)"), nil
-
 	case "HassCancelAllTimers":
 		if a.sched == nil {
 			return "", fmt.Errorf("scheduler не инициализирован")
@@ -395,16 +461,127 @@ func (a *Agent) executeTool(ctx context.Context, fc *FunctionCall) (string, erro
 		}
 		return fmt.Sprintf("Отменено таймеров: %d", n), nil
 
+	case "remember":
+		return a.handleRemember(ctx, fc.Arguments)
+
+	case "recall":
+		return a.handleRecall(ctx, fc.Arguments)
+
+	case "forget":
+		return a.handleForget(ctx, fc.Arguments)
+
 	default:
 		// All Hass* tools proxy to native handlers
 		return a.handleHassTool(ctxTool, fc.Name, fc.Arguments)
 	}
 }
 
+// wrapToolResult makes sure the tool result sent back to the LLM is a valid
+// JSON string, which GigaChat strictly requires for function results. Textual
+// tool outputs and error messages are JSON-encoded under a "result" key.
+func wrapToolResult(result string) string {
+	if result == "" {
+		return `{"result":""}`
+	}
+	if json.Valid([]byte(result)) {
+		return result
+	}
+	b, err := json.Marshal(map[string]string{"result": result})
+	if err != nil {
+		return `{"result":"<unserializable>"}`
+	}
+	return string(b)
+}
+
 // ExecuteToolPublic runs a scheduled or admin tool call by name+args (used by
 // the scheduler executor and command handlers). Returns the tool output text.
 func (a *Agent) ExecuteToolPublic(ctx context.Context, name string, args map[string]any) (string, error) {
 	return a.executeTool(ctx, &FunctionCall{Name: name, Arguments: args})
+}
+
+// handleRemember saves a durable memory for the current chat.
+func (a *Agent) handleRemember(ctx context.Context, args map[string]any) (string, error) {
+	text, _ := args["text"].(string)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", fmt.Errorf("укажи text — что запомнить")
+	}
+	if a.memory == nil {
+		return "", fmt.Errorf("память отключена (memory store не настроен)")
+	}
+
+	cat, _ := args["category"].(string)
+	cat = strings.ToLower(strings.TrimSpace(cat))
+	switch cat {
+	case "", "user", "preference", "habit", "fact", "other":
+	default:
+		cat = "other"
+	}
+
+	m := &Memory{
+		ChatID:    ChatIDFrom(ctx),
+		Category:  cat,
+		Text:      text,
+		UpdatedAt: time.Now(),
+	}
+	if err := a.memory.Add(ctx, m); err != nil {
+		return "", fmt.Errorf("не удалось сохранить в память: %w", err)
+	}
+	a.log.Info("agent: remembered", "chat_id", m.ChatID, "category", cat, "text", text)
+	return fmt.Sprintf("Запомнил: %s", text), nil
+}
+
+// handleRecall returns memories that match the query (case-insensitive
+// substring over text+category), or all memories when query is empty.
+func (a *Agent) handleRecall(ctx context.Context, args map[string]any) (string, error) {
+	if a.memory == nil {
+		return "", fmt.Errorf("память отключена (memory store не настроен)")
+	}
+	mems, err := a.memory.Load(ctx)
+	if err != nil {
+		return "", fmt.Errorf("не удалось прочитать память: %w", err)
+	}
+
+	chatID := ChatIDFrom(ctx)
+	query := strings.ToLower(strings.TrimSpace(strVal(args["query"])))
+
+	var lines []string
+	for _, m := range mems[chatID] {
+		if query != "" && !strings.Contains(strings.ToLower(m.Text), query) &&
+			!strings.Contains(strings.ToLower(m.Category), query) {
+			continue
+		}
+		line := fmt.Sprintf("[%s] %s", m.ID, m.Text)
+		if m.Category != "" && m.Category != "other" {
+			line = fmt.Sprintf("[%s] (%s) %s", m.ID, m.Category, m.Text)
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		if query != "" {
+			return "В памяти ничего не найдено по запросу.", nil
+		}
+		return "В памяти пока ничего нет.", nil
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+// handleForget deletes one memory by ID.
+func (a *Agent) handleForget(ctx context.Context, args map[string]any) (string, error) {
+	id, _ := args["id"].(string)
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", fmt.Errorf("укажи id памяти (получи через recall)")
+	}
+	if a.memory == nil {
+		return "", fmt.Errorf("память отключена (memory store не настроен)")
+	}
+
+	if err := a.memory.Delete(ctx, ChatIDFrom(ctx), id); err != nil {
+		return "", fmt.Errorf("не удалось удалить: %w", err)
+	}
+	a.log.Info("agent: forgot", "chat_id", ChatIDFrom(ctx), "id", id)
+	return fmt.Sprintf("Забыл память %s.", id), nil
 }
 
 // handleHassTool implements the HA device tools natively via REST.
@@ -707,7 +884,27 @@ func (a *Agent) liveContext(ctx context.Context, args map[string]any) (string, e
 		domains = d
 	}
 
+	// When filtering by area, resolve it through the HA area registry
+	// (entities are assigned to areas in HA, not by name substring).
+	areaSet := map[string]bool{}
+	if area != "" {
+		if err := a.EnsureIndex(ctx); err != nil {
+			return "", err
+		}
+		key := strings.ToLower(strings.TrimSpace(area))
+		for k, ents := range a.index.byArea {
+			if k == key || strings.Contains(k, key) {
+				for _, e := range ents {
+					areaSet[e] = true
+				}
+			}
+		}
+	}
+
 	filter := func(s hare.State) bool {
+		if area != "" && !areaSet[s.EntityID] {
+			return false
+		}
 		if name != "" && !strings.Contains(strings.ToLower(friendlyName(s)), strings.ToLower(name)) &&
 			!strings.Contains(strings.ToLower(s.EntityID), strings.ToLower(name)) {
 			return false

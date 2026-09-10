@@ -20,6 +20,10 @@ func WSRegistries(ctx context.Context, baseURL, token string) (areas []AreaInfo,
 		return nil, nil, nil, fmt.Errorf("ws dial: %w", err)
 	}
 	defer ws.CloseNow()
+	// HA registry lists (especially entity_registry) can exceed the default
+	// 32 KiB read limit of coder/websocket, which aborts with
+	// "message too big". Raise it to 16 MiB.
+	ws.SetReadLimit(16 << 20)
 
 	// auth handshake
 	var authMsg struct {

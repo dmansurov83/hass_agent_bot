@@ -134,9 +134,10 @@ func (c *GigaChatClient) getToken(ctx context.Context) (string, error) {
 // Chat sends a chat completion request. Functions (if any) are included.
 func (c *GigaChatClient) Chat(ctx context.Context, messages []Message, functions []Function) (*ChatResponse, error) {
 	payload := map[string]any{
-		"model":       c.model,
-		"messages":    messages,
-		"temperature": 0.2,
+		"model":         c.model,
+		"messages":      messages,
+		"temperature":   0.2,
+		"function_call": "auto",
 	}
 	if len(functions) > 0 {
 		payload["functions"] = functions

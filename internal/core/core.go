@@ -105,7 +105,14 @@ func (a *App) Run() error {
 	if histStore != nil {
 		defer histStore.Close()
 	}
-	agent := llm.NewAgent(llmClient, haCli, sched, histStore)
+	memStore, err := newMemoryStore(a.cfg, a.logger)
+	if err != nil {
+		a.logger.Warn("memory store init", "error", err)
+	}
+	if memStore != nil {
+		defer memStore.Close()
+	}
+	agent := llm.NewAgent(llmClient, haCli, sched, histStore, memStore)
 	agentRef = agent
 	agentExecutor = func(ctx context.Context, prompt string) (string, error) {
 		return agent.HandleMessage(ctx, prompt)
@@ -168,6 +175,11 @@ func (a *App) Run() error {
 // without touching the agent.
 func newHistoryStore(cfg *config.Config, log *slog.Logger) (llm.HistoryStore, error) {
 	return llm.NewFileStore(filepath.Join(cfg.DataDir, "history"), log)
+}
+
+// newMemoryStore creates the memory persistence layer for agent memories.
+func newMemoryStore(cfg *config.Config, log *slog.Logger) (llm.MemoryStore, error) {
+	return llm.NewFileMemoryStore(filepath.Join(cfg.DataDir, "memory"), log)
 }
 
 func tgOwnerChatID(cfg *config.Config) int64 {

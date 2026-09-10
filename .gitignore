@@ -21,6 +21,7 @@ config.yaml
 # Runtime data
 scheduler_jobs.json
 history/
+memory/
 *.log
 *.err.log
 
