@@ -1,0 +1,10 @@
+# Конфиг Docker-сборки.
+# Скрипт docker-build.ps1 читает версию и имя образа отсюда.
+
+version: "0.1.0"
+
+# имя образа в Docker Hub (без тега)
+image: dmansurov83/hass-agent-bot
+
+# целевые платформы через запятую (docker buildx)
+platforms: linux/amd64

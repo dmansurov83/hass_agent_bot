@@ -1,3 +1,5 @@
+version: "0.1.0"
+
 ha:
   url: http://192.168.1.10:8123
   token: ""            # long-lived access token HA (или env HA_TOKEN)

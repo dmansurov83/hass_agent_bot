@@ -66,6 +66,7 @@ func (a *App) Run() error {
 	statePath := filepath.Join(a.cfg.DataDir, "scheduler_jobs.json")
 	sched := scheduler.New(func(ctx context.Context, action scheduler.Action) error {
 		a.logger.Info("scheduler: executing action", "tool", action.Tool, "args", action.Args)
+		normalizeArgs(action.Args)
 		_, err := mcpCli.CallTool(ctx, action.Tool, action.Args)
 		return err
 	}, statePath)
@@ -83,7 +84,7 @@ func (a *App) Run() error {
 			DebounceSeconds: a.cfg.Notify.DebounceSeconds,
 			Entities:        a.cfg.Notify.Entities,
 		},
-		nil, // sender set after bot created
+		nil,
 	)
 	a.notif = nf
 
@@ -102,12 +103,11 @@ func (a *App) Run() error {
 	}
 	a.tg = tgBot
 
-	// Wire notification sender to TG bot
+	// Wire notification sender
 	nf.SetSender(func(ctx context.Context, text string) {
 		a.tg.SendNotification(ctx, text)
 	})
 
-	// Start notification listener
 	go nf.Run(ctx)
 
 	// Graceful shutdown
@@ -123,4 +123,14 @@ func (a *App) Run() error {
 	sched.Stop()
 
 	return nil
+}
+
+// normalizeArgs приводит аргументы к формату, который принимает HA MCP:
+// - domain, device_class: строка превращается в массив ["light"]
+func normalizeArgs(args map[string]any) {
+	for _, key := range []string{"domain", "device_class"} {
+		if v, ok := args[key].(string); ok && v != "" {
+			args[key] = []string{v}
+		}
+	}
 }

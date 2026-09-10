@@ -86,36 +86,48 @@ func orDescription(m map[string]any) string {
 
 // SchedulerFunction returns the function definition for the built-in scheduler
 // tool that lets the LLM schedule delayed or recurring actions.
+// Поля — плоские (без вложенных объектов): GigaChat надёжнее заполняет
+// верхнеуровневые поля, чем объекты внутри объектов.
 func SchedulerFunction() Function {
 	return Function{
 		Name:        "schedule_action",
-		Description: "Запланировать выполнение действия в будущем (однократный таймер с задержкой или по cron-расписанию)",
+		Description: "Запланировать выполнение действия в будущем. Используй at для одноразового времени (например '10:05'), delay для задержки ('15m'), cron для повторения ('0 0 7 * * 1-5'). Укажи ровно одно из трёх: at ИЛИ delay ИЛИ cron.",
 		Parameters: FunctionParameters(
 			map[string]any{
+				"at": map[string]any{
+					"type":        "string",
+					"description": "Время одноразового выполнения в формате 'HH:MM' (например '10:05' — выполнить сегодня в 10:05). Не для cron!",
+				},
 				"delay": map[string]any{
 					"type":        "string",
-					"description": "Задержка перед выполнением, например '15m', '2h', '1h30m'. Не используется для cron.",
+					"description": "Задержка перед выполнением, например '15m', '2h', '1h30m'. Не для cron!",
 				},
 				"cron": map[string]any{
 					"type":        "string",
-					"description": "Cron-выражение из 6 полей: секунды минуты часы день месяца месяц день недели. Например '0 0 7 * * 1-5' — каждый будний день в 7:00. Не используется для delay.",
+					"description": "Cron-выражение из 5-6 полей для ПОВТОРЯЮЩИХСЯ действий. Например '0 7 * * 1-5' — каждый будний день в 7:00. Не для одноразового времени!",
 				},
-"action": map[string]any{
-				"type":        "object",
-				"description": "Действие для выполнения. Поле tool — имя инструмента HA. Все остальные поля — аргументы для него (например name — название устройства, area — зона, domain — домен).",
-				"properties": map[string]any{
-					"tool": map[string]any{"type": "string", "description": "Имя инструмента HA: HassTurnOn, HassTurnOff, HassLightSet, HassClimateSetTemperature, HassSetVolume, HassBroadcast и т.д."},
-					"name": map[string]any{"type": "string", "description": "Название устройства (если требуется инструментом)"},
-					"area": map[string]any{"type": "string", "description": "Зона/комната (если требуется)"},
+				"tool": map[string]any{
+					"type":        "string",
+					"description": "Имя инструмента HA: HassTurnOn, HassTurnOff, HassLightSet, HassClimateSetTemperature, HassSetVolume, HassBroadcast.",
 				},
-				"additionalProperties": true,
-			},
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Название устройства из GetLiveContext (например 'switch_hall_main', 'Light'). Не выдумывай, только из HA!",
+				},
+				"area": map[string]any{
+					"type":        "string",
+					"description": "Зона/комната (например 'Гостиная', 'Комната 1', 'Туалет').",
+				},
+				"domain": map[string]any{
+					"type":        "string",
+					"description": "Домен устройства (light, switch, fan, climate).",
+				},
 				"label": map[string]any{
 					"type":        "string",
-					"description": "Название таймера для отображения в списке",
+					"description": "Понятное название таймера для списка /timers.",
 				},
 			},
-			[]string{"action"},
+			[]string{"tool"},
 		),
 	}
 }
@@ -147,20 +159,28 @@ func SystemPrompt() Message {
 - HassCancelAllTimers — отменить все таймеры
 - GetLiveContext — получить ТЕКУЩЕЕ состояние устройств, датчиков, областей (аргументы: name, domain, area)
 - GetDateTime — текущие дата и время
-- schedule_action — запланировать действие в будущем (delay или cron)
+- schedule_action — запланировать действие в будущем (at — одноразово в время HH:MM, delay — через N минут, cron — по расписанию)
 
 Правила:
 1. Отвечай кратко и понятно на русском, одним-двумя предложениями.
-2. Имена устройств в Home Assistant — ТЕХНИЧЕСКИЕ (например "switch_hall_main", "my_kitchen_light", "Table-Led table-led-light"). Не выдумывай имена!
-3. Прежде чем включать/выключать устройство — ВСЕГДА сначала вызови GetLiveContext, чтобы узнать точные имена (поля "names") и области ("areas") устройств. Затем используй ТОЧНОЕ имя из ответа.
-4. Поле "domain" в HassTurnOn/HassTurnOff принимает МАССИВ строк, например ["light"], ["switch"], а не строку "light".
-5. Чтобы включить/выключить — вызови HassTurnOn/HassTurnOff с name (точное имя из GetLiveContext) и по возможности area (например "Гостиная", "Туалет").
-6. Если пользователь сказал «свет в гостиной», а в GetLiveContext есть area "Гостиная" — можно вызвать HassTurnOn с name и area, или с area без name (включит все устройства зоны).
-7. Чтобы узнать состояние/температуру — вызови GetLiveContext (с фильтром по name, domain, area) и перескажи значения.
-8. Если пользователь просит «покажи все устройства» — вызови GetLiveContext без аргументов и ПЕРЕЧИСЛИ устройства кратко списком.
-9. Не придумывай результаты — полагайся на ответ инструментов.
-10. Если инструмент вернул ошибку — честно скажи об этом.
-11. Для отложенных действий используй schedule_action. Поле action — это объект с tool (имя инструмента HA) и аргументами плоскими полями, например: {"tool": "HassTurnOn", "name": "switch_hall_main", "area": "Гостиная"}.
-12. Если пользователь не указал, какое именно устройство — уточни.`,
+2. Имена устройств в Home Assistant — ТЕХНИЧЕСКИЕ, case-sensitive. Например "switch_hall_main", "Light", "Table-Led table-led-light". НИКОГДА не выдумывай имена!
+3. ВСЕГДА сначала вызывай GetLiveContext, чтобы узнать точные имена (поля "names") и зоны ("areas"). Никогда не угадывай name.
+4. Поле "domain" принимает строку, бот сам превратит в массив.
+5. Включать/выключать можно ТРЕМЯ способами:
+   a) По area (зона) — HassTurnOn с полем area, без name. Включит ВСЕ устройства в зоне.
+   b) По точному name из GetLiveContext — HassTurnOn с name и по желанию area.
+   c) По domain — например HassTurnOn с domain "light".
+6. Примеры правильного вызова HassTurnOn:
+   - {"name": "Table-Led table-led-light"} — конкретное устройство
+   - {"area": "Гостиная"} — все устройства в зоне (работает!)
+   - {"area": "Комната 1"} — все устройства в комнате 1
+7. Не придумывай результаты — полагайся на ответ инструментов. Если инструмент вернул ошибку — честно скажи об этом.
+8. Для отложенных действий используй schedule_action с плоскими полями:
+   - "в 10:05" (одноразово) → поле at: "10:05", БЕЗ cron!
+   - "через 15 минут" → поле delay: "15m"
+   - "каждый день в 7:00" / "по будням в 7:00" (повторение) → поле cron: "0 0 7 * * *" / "0 0 7 * * 1-5" (с секундами)
+   Пример одноразового: {"tool":"HassTurnOff","area":"Комната 1","at":"10:05","label":"Выключить свет в комнате 1"} + tool-параметры (name/area/domain).
+   Пример cron: {"tool":"HassTurnOff","name":"Light","cron":"0 0 7 * * 1-5","label":"Выключить свет по будням в 7:00"}.
+9. Если пользователь не указал, какое именно устройство — уточни. Никогда не придумывай name самостоятельно.`,
 	}
 }

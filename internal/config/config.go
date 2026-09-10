@@ -10,6 +10,7 @@ import (
 )
 
 type Config struct {
+	Version  string // версия приложения (для docker-тегов и логов)
 	HA       HAConfig
 	TG       TGConfig
 	GigaChat GigaChatConfig
@@ -40,6 +41,7 @@ type NotifyConfig struct {
 
 func Load(path string) (*Config, error) {
 	cfg := &Config{
+		Version: "0.1.0",
 		HA: HAConfig{
 			URL: "http://localhost:8123",
 		},
@@ -79,6 +81,9 @@ func validate(cfg *Config) error {
 }
 
 func applyEnv(cfg *Config) {
+	if v := os.Getenv("APP_VERSION"); v != "" {
+		cfg.Version = v
+	}
 	if v := os.Getenv("HA_URL"); v != "" {
 		cfg.HA.URL = v
 	}

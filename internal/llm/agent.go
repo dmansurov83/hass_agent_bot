@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ const maxIterations = 5
 
 // Scheduler interface used by the agent to schedule actions.
 type Scheduler interface {
+	ScheduleAt(runAt time.Time, action scheduler.Action, label string) (*scheduler.Job, error)
 	ScheduleIn(d time.Duration, action scheduler.Action, label string) (*scheduler.Job, error)
 	ScheduleCron(expr string, action scheduler.Action, label string) (*scheduler.Job, error)
 	Cancel(id string) bool
@@ -116,8 +118,20 @@ func (a *Agent) executeTool(ctx context.Context, fc *FunctionCall) (string, erro
 
 	default:
 		// All HA tools (HassTurnOn, HassLightSet, GetLiveContext, ...) proxy directly to MCP
-		return a.mcp.CallTool(ctxTool, fc.Name, fc.Arguments)
+		return a.mcp.CallTool(ctxTool, fc.Name, normalizeArgs(fc.Arguments))
 	}
+}
+
+// normalizeArgs приводит аргументы к формату, который принимает HA MCP:
+// domain и device_class — массивы, а GigaChat часто шлёт строкой.
+func normalizeArgs(args map[string]any) map[string]any {
+	normalized := args
+	for _, key := range []string{"domain", "device_class"} {
+		if v, ok := normalized[key].(string); ok && v != "" {
+			normalized[key] = []string{v}
+		}
+	}
+	return normalized
 }
 
 func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string, error) {
@@ -127,22 +141,41 @@ func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string
 
 	a.log.Info("agent: schedule_action raw args", "args", args)
 
-	actionRaw, ok := args["action"].(map[string]any)
-	if !ok {
-		return "", fmt.Errorf("action is required")
+	// Плоский формат: tool, name, area, domain, delay/cron, label — всё в args.
+	toolName, _ := args["tool"].(string)
+	if toolName == "" {
+		// fallback: старый формат с вложенным "action"
+		if actionRaw, ok := args["action"].(map[string]any); ok {
+			toolName, _ = actionRaw["tool"].(string)
+			if toolName == "" {
+				toolName, _ = actionRaw["name"].(string)
+			}
+			// merge аргументов из вложенного объекта на верхний уровень
+			for k, v := range actionRaw {
+				if _, exists := args[k]; !exists {
+					args[k] = v
+				}
+			}
+		}
 	}
 
-	// Extract HA tool name and args from the action
-	toolName, _ := actionRaw["tool"].(string)
 	if toolName == "" {
-		// fallback: попробовать "name" (старый формат)
-		toolName, _ = actionRaw["name"].(string)
-	}
-	if toolName == "" {
-		return "", fmt.Errorf("у action должно быть поле 'tool' с именем инструмента HA (например HassTurnOn)")
+		return "", fmt.Errorf("укажи поле 'tool' с именем инструмента HA (например HassTurnOn)")
 	}
 
-	toolArgs := extractToolArgs(actionRaw)
+	// Аргументы для инструмента: все поля, кроме служебных (tool, at, delay, cron, label)
+	toolArgs := make(map[string]any)
+	for k, v := range args {
+		switch k {
+		case "tool", "action", "at", "delay", "cron", "label":
+			continue
+		}
+		toolArgs[k] = v
+	}
+	// если GigaChat всё же прислал вложенный "arguments" — забираем его
+	if len(toolArgs) == 0 {
+		toolArgs = extractToolArgs(args)
+	}
 
 	act := scheduler.Action{
 		Tool: toolName,
@@ -150,12 +183,17 @@ func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string
 	}
 	label := strVal(args["label"])
 
+	at, hasAt := args["at"].(string)
 	delay, hasDelay := args["delay"].(string)
 	cron, hasCron := args["cron"].(string)
 
 	switch {
 	case hasCron && cron != "":
-		job, err := a.sched.ScheduleCron(cron, act, label)
+		norm, err := normalizeCron(cron)
+		if err != nil {
+			return "", err
+		}
+		job, err := a.sched.ScheduleCron(norm, act, label)
 		if err != nil {
 			return "", err
 		}
@@ -172,8 +210,19 @@ func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string
 		}
 		return fmt.Sprintf("Таймер на %s: %s (ID: %s)", delay, job.Label, job.ID), nil
 
+	case hasAt && at != "":
+		t, err := parseAtTime(at)
+		if err != nil {
+			return "", err
+		}
+		job, err := a.sched.ScheduleAt(t, act, label)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Таймер на %s: %s (ID: %s)", t.Format("15:04"), job.Label, job.ID), nil
+
 	default:
-		return "", fmt.Errorf("укажи delay или cron для schedule_action")
+		return "", fmt.Errorf("укажи at, delay или cron для schedule_action")
 	}
 }
 
@@ -216,4 +265,49 @@ func strVal(v any) string {
 		return s
 	}
 	return ""
+}
+
+func normalizeCron(raw string) (string, error) {
+	// убираем возможные мусорные префиксы: время вида "10:05", "10:05 AM" и т.п.
+	parts := strings.Fields(raw)
+	cleaned := make([]string, 0, len(parts))
+	for _, p := range parts {
+		// пропускаем части с двоеточием (это время, а не cron-поле)
+		if strings.Contains(p, ":") {
+			continue
+		}
+		cleaned = append(cleaned, p)
+	}
+
+	if len(cleaned) < 5 {
+		return "", fmt.Errorf("cron-выражение должно содержать минимум 5 полей, получено %q: %v", raw, parts)
+	}
+
+	if len(cleaned) == 5 {
+		// robfig/cron с WithSeconds() требует 6 полей, добавляем секунды = 0
+		return "0 " + strings.Join(cleaned, " "), nil
+	}
+
+	return strings.Join(cleaned, " "), nil
+}
+
+// parseAtTime разбирает время "HH:MM" и возвращает сегодняшнюю (или завтрашнюю)
+// дату с этим временем. Если время уже прошло — берёт завтрашний день.
+func parseAtTime(s string) (time.Time, error) {
+	t, err := time.ParseInLocation("15:04", strings.TrimSpace(s), time.Local)
+	if err != nil {
+		// пробуем и с секундами/прочим мусором от GigaChat
+		t2, err2 := time.ParseInLocation("15:04:05", strings.TrimSpace(s), time.Local)
+		if err2 != nil {
+			return time.Time{}, fmt.Errorf("неверный формат времени %q, ожидается HH:MM (например 10:05)", s)
+		}
+		t = t2
+	}
+
+	now := time.Now()
+	when := time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), t.Second(), 0, time.Local)
+	if !when.After(now) {
+		when = when.AddDate(0, 0, 1) // на завтра, если время уже прошло
+	}
+	return when, nil
 }

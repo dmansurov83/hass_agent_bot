@@ -19,6 +19,12 @@ type fakeScheduler struct {
 	jobs []scheduler.Job
 }
 
+func (f *fakeScheduler) ScheduleAt(runAt time.Time, action scheduler.Action, label string) (*scheduler.Job, error) {
+	j := &scheduler.Job{ID: "fake-at", Label: label, Action: action, RunAt: runAt}
+	f.jobs = append(f.jobs, *j)
+	return j, nil
+}
+
 func (f *fakeScheduler) ScheduleIn(d time.Duration, action scheduler.Action, label string) (*scheduler.Job, error) {
 	j := &scheduler.Job{ID: "fake-timer", Label: label, Action: action, RunAt: time.Now().Add(d)}
 	f.jobs = append(f.jobs, *j)
@@ -217,4 +223,64 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestParseAtTime(t *testing.T) {
+	now := time.Now()
+	tm, err := parseAtTime("10:05")
+	if err != nil {
+		t.Fatalf("parseAtTime: %v", err)
+	}
+	if tm.Hour() != 10 || tm.Minute() != 5 {
+		t.Errorf("time = %v", tm)
+	}
+	// should be today or tomorrow
+	diff := tm.Sub(now)
+	if diff < 0 || diff > 24*time.Hour {
+		t.Errorf("unexpected time diff: %v", diff)
+	}
+}
+
+func TestParseAtTime_BadFormat(t *testing.T) {
+	_, err := parseAtTime("abc")
+	if err == nil {
+		t.Error("expected error for bad format")
+	}
+}
+
+func TestNormalizeCron_5Fields(t *testing.T) {
+	norm, err := normalizeCron("0 7 * * 1-5")
+	if err != nil {
+		t.Fatalf("normalizeCron: %v", err)
+	}
+	if norm != "0 0 7 * * 1-5" {
+		t.Errorf("got %q, want 6-field expr", norm)
+	}
+}
+
+func TestNormalizeCron_6Fields(t *testing.T) {
+	norm, err := normalizeCron("0 0 7 * * 1-5")
+	if err != nil {
+		t.Fatalf("normalizeCron: %v", err)
+	}
+	if norm != "0 0 7 * * 1-5" {
+		t.Errorf("got %q", norm)
+	}
+}
+
+func TestNormalizeCron_WithTimePrefix(t *testing.T) {
+	norm, err := normalizeCron("10:05 0 7 * * 1-5")
+	if err != nil {
+		t.Fatalf("normalizeCron: %v", err)
+	}
+	if norm != "0 0 7 * * 1-5" {
+		t.Errorf("got %q", norm)
+	}
+}
+
+func TestNormalizeCron_TooShort(t *testing.T) {
+	_, err := normalizeCron("10:05 10:05 * * *")
+	if err == nil {
+		t.Error("expected error for too-short cron")
+	}
 }

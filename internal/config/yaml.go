@@ -1,12 +1,14 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 
 	"gopkg.in/yaml.v3"
 )
 
 type yamlConfig struct {
+	Version  string `yaml:"version"`
 	HA struct {
 		URL   string `yaml:"url"`
 		Token string `yaml:"token"`
@@ -26,6 +28,19 @@ type yamlConfig struct {
 }
 
 func loadYAML(path string, cfg *Config) error {
+	stat, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			slog.Debug("config: file not found, skipping", "path", path)
+			return nil
+		}
+		return err
+	}
+	if stat.IsDir() {
+		slog.Debug("config: path is a directory, skipping", "path", path)
+		return nil
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -36,6 +51,9 @@ func loadYAML(path string, cfg *Config) error {
 		return err
 	}
 
+	if y.Version != "" {
+		cfg.Version = y.Version
+	}
 	if y.HA.URL != "" {
 		cfg.HA.URL = y.HA.URL
 	}
