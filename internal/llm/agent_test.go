@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -100,8 +102,8 @@ func TestAgent_HandleMessage_ToolCall(t *testing.T) {
 		t.Fatalf("giga client: %v", err)
 	}
 
-	agent := NewAgent(gigaCli, haCli, &fakeScheduler{})
-	reply, err := agent.HandleMessage(context.Background(), "включи свет в зале")
+	agent := NewAgent(gigaCli, haCli, &fakeScheduler{}, nil)
+	reply, err := agent.HandleMessage(WithChatID(context.Background(), 100), "включи свет в зале")
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
 	}
@@ -142,8 +144,8 @@ func TestAgent_HandleMessage_NoToolCall(t *testing.T) {
 		t.Fatalf("giga client: %v", err)
 	}
 
-	agent := NewAgent(gigaCli, haCli, &fakeScheduler{})
-	reply, err := agent.HandleMessage(context.Background(), "привет")
+	agent := NewAgent(gigaCli, haCli, &fakeScheduler{}, nil)
+	reply, err := agent.HandleMessage(WithChatID(context.Background(), 100), "привет")
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
 	}
@@ -153,11 +155,92 @@ func TestAgent_HandleMessage_NoToolCall(t *testing.T) {
 }
 
 func TestAgent_Reset(t *testing.T) {
-	agent := NewAgent(nil, nil, nil)
-	agent.history = append(agent.history, Message{Role: "user", Content: "foo"})
-	agent.Reset()
-	if len(agent.history) != 0 {
+	agent := NewAgent(nil, nil, nil, nil)
+	agent.histories[100] = []Message{{Role: "user", Content: "foo"}}
+	agent.Reset(100)
+	if len(agent.histories[100]) != 0 {
 		t.Errorf("history not reset")
+	}
+	if _, ok := agent.histories[100]; ok {
+		t.Errorf("chat still present after reset")
+	}
+}
+
+func TestAgent_Reset_Persisted(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir, nil)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	agent := NewAgent(nil, nil, nil, store)
+	agent.histories[100] = []Message{{Role: "user", Content: "foo"}, {Role: "assistant", Content: "bar"}}
+	agent.saveHistory(100)
+
+	// file exists
+	if _, err := os.Stat(filepath.Join(dir, "chat_100.json")); err != nil {
+		t.Fatalf("history file not written: %v", err)
+	}
+
+	agent.Reset(100)
+	if _, err := os.Stat(filepath.Join(dir, "chat_100.json")); !os.IsNotExist(err) {
+		t.Errorf("history file should be deleted after reset")
+	}
+}
+
+func TestFileStore_Roundtrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir, nil)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	defer store.Close()
+
+	msgs := []Message{
+		{Role: "user", Content: "включи свет"},
+		{Role: "assistant", Content: "Свет включён"},
+	}
+	if err := store.Save(context.Background(), 42, msgs); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := loaded[42]
+	if len(got) != 2 || got[0].Content != "включи свет" || got[1].Content != "Свет включён" {
+		t.Errorf("roundtrip mismatch: %+v", got)
+	}
+}
+
+func TestFileStore_Load_IgnoresCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir, nil)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	defer store.Close()
+
+	// good file
+	store.Save(context.Background(), 1, []Message{{Role: "user", Content: "hi"}})
+	// corrupt file
+	if err := os.WriteFile(filepath.Join(dir, "chat_2.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("write corrupt: %v", err)
+	}
+	// bad filename (non-numeric id)
+	if err := os.WriteFile(filepath.Join(dir, "chat_abc.json"), []byte("[]"), 0o644); err != nil {
+		t.Fatalf("write bad name: %v", err)
+	}
+
+	loaded, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(loaded[1]) != 1 {
+		t.Errorf("good chat lost: %+v", loaded)
+	}
+	if _, ok := loaded[2]; ok {
+		t.Errorf("corrupt chat should be ignored")
 	}
 }
 

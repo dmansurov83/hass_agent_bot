@@ -221,7 +221,8 @@ func (b *Bot) textHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 		return
 	}
 
-	// Send to LLM agent
+	// Send to LLM agent (carry the chat ID so AI tasks know where to reply)
+	ctx = llm.WithChatID(ctx, chatID)
 	reply, err := b.agent.HandleMessage(ctx, text)
 	if err != nil {
 		b.log.Error("tg: agent error", "error", err)
@@ -250,7 +251,7 @@ func (b *Bot) textHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 func (b *Bot) resetHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
 	if b.agent != nil {
-		b.agent.Reset()
+		b.agent.Reset(chatID)
 	}
 	tgBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,

@@ -20,6 +20,7 @@ config.yaml
 
 # Runtime data
 scheduler_jobs.json
+history/
 *.log
 *.err.log
 

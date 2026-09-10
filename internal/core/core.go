@@ -62,7 +62,29 @@ func (a *App) Run() error {
 
 	// Scheduler engine
 	statePath := filepath.Join(a.cfg.DataDir, "scheduler_jobs.json")
+
+	// Late-bound hooks: scheduler is created before the agent and TG bot.
+	var agentExecutor func(ctx context.Context, prompt string) (string, error)
+	var sendToChat func(ctx context.Context, chatID int64, text string)
+
 	sched := scheduler.New(func(ctx context.Context, action scheduler.Action) error {
+		if action.AgentPrompt != "" {
+			if agentExecutor == nil {
+				return fmt.Errorf("AI agent not initialized")
+			}
+			result, err := agentExecutor(llm.WithTaskMode(ctx), action.AgentPrompt)
+			if err != nil {
+				return fmt.Errorf("AI task error: %w", err)
+			}
+			if result != "" && sendToChat != nil {
+				chatID := action.ChatID
+				if chatID == 0 {
+					chatID = tgOwnerChatID(a.cfg) // fallback: first allowed user
+				}
+				sendToChat(ctx, chatID, result)
+			}
+			return nil
+		}
 		a.logger.Info("scheduler: executing action", "tool", action.Tool, "args", action.Args)
 		normalizeArgs(action.Args)
 		_, err := mcpCli.CallTool(ctx, action.Tool, action.Args)
@@ -72,7 +94,17 @@ func (a *App) Run() error {
 	go sched.Run(ctx)
 
 	// LLM agent
-	agent := llm.NewAgent(llmClient, mcpCli, sched)
+	histStore, err := newHistoryStore(a.cfg, a.logger)
+	if err != nil {
+		a.logger.Warn("history store init", "error", err) // non-fatal
+	}
+	if histStore != nil {
+		defer histStore.Close()
+	}
+	agent := llm.NewAgent(llmClient, mcpCli, sched, histStore)
+	agentExecutor = func(ctx context.Context, prompt string) (string, error) {
+		return agent.HandleMessage(ctx, prompt)
+	}
 
 	// Notifications engine
 	nf := notify.New(
@@ -101,6 +133,10 @@ func (a *App) Run() error {
 	}
 	a.tg = tgBot
 
+	sendToChat = func(ctx context.Context, chatID int64, text string) {
+		tgBot.SendMessage(ctx, chatID, text)
+	}
+
 	// Wire notification sender
 	nf.SetSender(func(ctx context.Context, text string) {
 		a.tg.SendNotification(ctx, text)
@@ -121,6 +157,21 @@ func (a *App) Run() error {
 	sched.Stop()
 
 	return nil
+}
+
+// newHistoryStore creates the history persistence layer for dialogs.
+// Currently a JSON-file store; future backends (SQLite, Postgres) plug in here
+// without touching the agent.
+func newHistoryStore(cfg *config.Config, log *slog.Logger) (llm.HistoryStore, error) {
+	return llm.NewFileStore(filepath.Join(cfg.DataDir, "history"), log)
+}
+
+// tgOwnerChatID returns the first allowed user ID (owner) for fallback sends.
+func tgOwnerChatID(cfg *config.Config) int64 {
+	if len(cfg.TG.AllowUserIDs) == 0 {
+		return 0
+	}
+	return cfg.TG.AllowUserIDs[0]
 }
 
 // normalizeArgs приводит аргументы к формату, который принимает HA MCP:

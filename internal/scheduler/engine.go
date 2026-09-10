@@ -13,11 +13,13 @@ import (
 	cronlib "github.com/robfig/cron/v3"
 )
 
-// Action is a deferred HA action: a raw MCP tool call executed later.
+// Action is a deferred action: a raw MCP tool call or an AI prompt executed later.
 type Action struct {
-	Tool string         `json:"tool"`
-	Args map[string]any `json:"args"`
-	Text string         `json:"text,omitempty"` // human-readable description
+	Tool        string         `json:"tool"`
+	Args        map[string]any `json:"args"`
+	Text        string         `json:"text,omitempty"`
+	AgentPrompt string         `json:"agent_prompt,omitempty"` // non-empty → AI task
+	ChatID      int64          `json:"chat_id,omitempty"`      // TG chat to send AI result to
 }
 
 // JobType distinguishes one-shot timers from recurring cron jobs.

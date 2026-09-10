@@ -132,13 +132,59 @@ func SchedulerFunction() Function {
 	}
 }
 
-// AllFunctions returns HA tools + the scheduler tool for the LLM agent.
+// SchedulerAIFunction returns the function definition for scheduling a background
+// AI task: at fire time the full agent (ReAct loop) runs and the result is sent
+// to the chat that created the task.
+func SchedulerAIFunction() Function {
+	return Function{
+		Name:        "schedule_ai_action",
+		Description: "Запланировать любую задачу, где AI должен САМ подумать и написать ответ в чат: рассказать что-то, проверить датчики и сделать вывод, напомнить, прислать сводку. Не используй HassBroadcast для ответа в чат — это только для озвучки через колонки!",
+		Parameters: FunctionParameters(
+			map[string]any{
+				"at": map[string]any{
+					"type":        "string",
+					"description": "Время одноразового выполнения в формате 'HH:MM' (например '10:05'). Не для cron!",
+				},
+				"delay": map[string]any{
+					"type":        "string",
+					"description": "Задержка перед выполнением, например '15m', '2h', '1h30m'. Не для cron!",
+				},
+				"cron": map[string]any{
+					"type":        "string",
+					"description": "Cron-выражение из 5-6 полей для ПОВТОРЯЮЩИХСЯ задач. Например '0 0 7 * * *' — каждый день в 7:00. Не для одноразового времени!",
+				},
+				"prompt": map[string]any{
+					"type":        "string",
+					"description": "Что нужно сделать при срабатывании — просто повтори просьбу пользователя словами, без переформулировок. Примеры: 'расскажи анекдот', 'проверь заряд батарей, напиши если ниже 20%', 'напомни выключить чайник', 'какая погода на улице'.",
+				},
+				"label": map[string]any{
+					"type":        "string",
+					"description": "Понятное название задачи для списка /timers.",
+				},
+			},
+			[]string{"prompt"},
+		),
+	}
+}
+
+// HAOnlyFunctions returns only HA tools (no scheduler tools). Used during background
+// AI task execution where scheduling is not allowed.
+func HAOnlyFunctions(mcpTools []mcp.Tool) []Function {
+	fns := make([]Function, 0, len(mcpTools))
+	for _, t := range mcpTools {
+		fns = append(fns, ToFunction(t))
+	}
+	return fns
+}
+
+// AllFunctions returns HA tools + the scheduler tools for the LLM agent.
 func AllFunctions(mcpTools []mcp.Tool) []Function {
-	fns := make([]Function, 0, len(mcpTools)+1)
+	fns := make([]Function, 0, len(mcpTools)+2)
 	for _, t := range mcpTools {
 		fns = append(fns, ToFunction(t))
 	}
 	fns = append(fns, SchedulerFunction())
+	fns = append(fns, SchedulerAIFunction())
 	return fns
 }
 
@@ -155,11 +201,12 @@ func SystemPrompt() Message {
 - HassClimateSetTemperature — установить температуру климата
 - HassSetVolume / HassSetVolumeRelative — громкость медиа
 - HassMediaPause / HassMediaUnpause / HassMediaNext / HassMediaPrevious — управление медиа
-- HassBroadcast — озвучить сообщение через умный дом
+- HassBroadcast — озвучить сообщение через умный дом (колонки/динамики). Только для голосового объявления в доме, НЕ для ответа в чат!
 - HassCancelAllTimers — отменить все таймеры
 - GetLiveContext — получить ТЕКУЩЕЕ состояние устройств, датчиков, областей (аргументы: name, domain, area)
 - GetDateTime — текущие дата и время
 - schedule_action — запланировать действие в будущем (at — одноразово в время HH:MM, delay — через N минут, cron — по расписанию)
+- schedule_ai_action — запланировать ФОНОВУЮ AI-задачу: в заданное время ты сам проверишь состояние дома и пришлёшь результат в чат (поле prompt — что проверить и при каком условии писать)
 
 Правила:
 1. Отвечай кратко и понятно на русском, одним-двумя предложениями.
@@ -181,6 +228,11 @@ func SystemPrompt() Message {
    - "каждый день в 7:00" / "по будням в 7:00" (повторение) → поле cron: "0 0 7 * * *" / "0 0 7 * * 1-5" (с секундами)
    Пример одноразового: {"tool":"HassTurnOff","area":"Комната 1","at":"10:05","label":"Выключить свет в комнате 1"} + tool-параметры (name/area/domain).
    Пример cron: {"tool":"HassTurnOff","name":"Light","cron":"0 0 7 * * 1-5","label":"Выключить свет по будням в 7:00"}.
-9. Если пользователь не указал, какое именно устройство — уточни. Никогда не придумывай name самостоятельно.`,
+9. Для фоновой задачи, где нужно САМОМУ подумать и написать в чат (рассказать, проверить, напомнить, прислать сводку) — используй schedule_ai_action с полем prompt, повторяющим просьбу пользователя:
+   Пример: {"prompt":"проверь заряд батарей всех датчиков, напиши если какой-то ниже 20%","cron":"0 0 7 * * *","label":"Проверка батарей"}
+   Пример: {"prompt":"расскажи мне анекдот","delay":"1m","label":"Анекдот"}
+   Пример: {"prompt":"напомни выключить чайник","at":"18:30","label":"Напоминание"}
+   НИКОГДА не используй HassBroadcast для ответа в чат — он только озвучивает через колонки. Всё, что пользователь просит «расскажи/напиши/пришли/сообщи/напомни» в будущем — schedule_ai_action.
+10. Если пользователь не указал, какое именно устройство — уточни. Никогда не придумывай name самостоятельно.`,
 	}
 }
