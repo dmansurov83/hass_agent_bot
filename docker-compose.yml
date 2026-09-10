@@ -10,7 +10,10 @@ services:
       - HA_TOKEN=${HA_TOKEN}
       - TG_TOKEN=${TG_TOKEN}
       - ALLOW_USERS=${ALLOW_USERS}
-      - GIGACHAT_CREDENTIALS=${GIGACHAT_CREDENTIALS}
+      - LLM_CREDENTIALS=${LLM_CREDENTIALS:-${GIGACHAT_CREDENTIALS:-}}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gigachat}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
       - DATA_DIR=/data
     volumes:
       # config.yaml — ФАЙЛ, не папка
