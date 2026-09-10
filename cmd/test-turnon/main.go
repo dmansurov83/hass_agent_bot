@@ -2,15 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"gopkg.in/yaml.v3"
 
-	hamcp "hass-agent-bot/internal/ha/mcp"
+	hare "hass-agent-bot/internal/ha/rest"
 )
 
 type cfg struct {
@@ -28,94 +26,44 @@ func main() {
 		os.Exit(1)
 	}
 
-	cli, err := hamcp.New(context.Background(), c.HA.URL+"/api/mcp", hamcp.Options{Token: c.HA.Token})
+	cli := hare.New(c.HA.URL, hare.Options{Token: c.HA.Token})
+
+	// 1. Dump all states to see device names
+	states, err := cli.States(context.Background())
 	if err != nil {
-		fmt.Println("mcp:", err)
+		fmt.Println("states error:", err)
 		os.Exit(1)
 	}
-	defer cli.Close()
-
-	// 1. Dump full live context to see device names
-	res, err := cli.Raw().CallTool(context.Background(), mcp.CallToolRequest{
-		Params: mcp.CallToolParams{Name: "GetLiveContext", Arguments: map[string]any{}},
-	})
-	if err != nil {
-		fmt.Println("GetLiveContext error:", err)
-		os.Exit(1)
+	fmt.Println("===== ALL ENTITIES =====")
+	for _, s := range states {
+		fmt.Printf("%s | %s | %s\n", s.EntityID, s.State, friendly(s))
 	}
-	ctxText := ""
-	for _, content := range res.Content {
-		if tc, ok := content.(mcp.TextContent); ok {
-			ctxText += tc.Text
+	fmt.Println("========================")
+
+	// 2. Try turning on first light/switch/fan
+	var target string
+	for _, s := range states {
+		if strings.HasPrefix(s.EntityID, "light.") || strings.HasPrefix(s.EntityID, "switch.") {
+			target = s.EntityID
+			break
 		}
 	}
-	fmt.Println("===== FULL LIVE CONTEXT =====")
-	fmt.Println(ctxText)
-	fmt.Println("=============================")
-
-	// 2. Pick first device with domain light or switch and try HassTurnOn
-	toTry := []string{}
-	lines := strings.Split(ctxText, "\n")
-	for _, line := range lines {
-		l := strings.ToLower(line)
-		if strings.Contains(l, "domain: light") || strings.Contains(l, "domain: switch") || strings.Contains(l, "light") || strings.Contains(l, "switch") {
-			// find "names: X" on same line or nearby
-			if strings.Contains(line, "names:") {
-				part := line[strings.Index(line, "names:")+6:]
-				part = strings.TrimSpace(part)
-				if idx := strings.Index(part, "\n"); idx >= 0 {
-					part = part[:idx]
-				}
-				name := strings.TrimSpace(part)
-				if name != "" && !strings.Contains(name, "unavailable") {
-					toTry = append(toTry, name)
-				}
-			}
-		}
-	}
-
-	// also dump raw names from lines
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "names:") {
-			name := strings.TrimSpace(trimmed[6:])
-			name = strings.TrimSpace(strings.Split(name, "\n")[0])
-			if name != "" && !strings.Contains(strings.ToLower(name), "unavailable") {
-				toTry = append(toTry, name)
-			}
-		}
-	}
-
-	// dedupe
-	seen := map[string]bool{}
-	var unique []string
-	for _, n := range toTry {
-		if !seen[n] {
-			seen[n] = true
-			unique = append(unique, n)
-		}
-	}
-
-	if len(unique) == 0 {
-		fmt.Println("No candidate devices found to turn on")
+	if target == "" {
+		fmt.Println("No light/switch entities found")
 		return
 	}
 
-	fmt.Printf("\nTrying HassTurnOn on %d devices:\n", len(unique))
-	for _, name := range unique {
-		res, err := cli.Raw().CallTool(context.Background(), mcp.CallToolRequest{
-			Params: mcp.CallToolParams{
-				Name:      "HassTurnOn",
-				Arguments: map[string]any{"name": name},
-			},
-		})
-		out := ""
-		for _, content := range res.Content {
-			if tc, ok := content.(mcp.TextContent); ok {
-				out += tc.Text
-			}
-		}
-		j, _ := json.MarshalIndent(res.StructuredContent, "", "  ")
-		fmt.Printf("  [%s] err=%v isError=%v out=%s structured=%s\n", name, err, res.IsError, strings.TrimSpace(out), string(j))
+	fmt.Printf("\nTrying turn_on %s\n", target)
+	if err := cli.CallService(context.Background(), strings.SplitN(target, ".", 2)[0], "turn_on", map[string]any{"entity_id": []string{target}}); err != nil {
+		fmt.Println("turn_on error:", err)
+	} else {
+		fmt.Println("turn_on OK")
 	}
+}
+
+func friendly(s hare.State) string {
+	if f, ok := s.Attributes["friendly_name"].(string); ok {
+		return f
+	}
+	return ""
 }

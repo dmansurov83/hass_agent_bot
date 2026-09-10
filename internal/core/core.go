@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"hass-agent-bot/internal/config"
-	hamcp "hass-agent-bot/internal/ha/mcp"
+	hare "hass-agent-bot/internal/ha/rest"
 	"hass-agent-bot/internal/llm"
 	"hass-agent-bot/internal/notify"
 	"hass-agent-bot/internal/scheduler"
@@ -20,7 +20,7 @@ import (
 type App struct {
 	cfg    *config.Config
 	logger *slog.Logger
-	mcp    *hamcp.Client
+	ha     *hare.Client
 	tg     *tg.Bot
 	llm    *llm.Agent
 	sched  *scheduler.Engine
@@ -41,17 +41,18 @@ func (a *App) Run() error {
 		"model", a.cfg.LLM.Model,
 	)
 
-	// Connect to HA via MCP
-	mcpCli, err := hamcp.New(ctx, a.cfg.HA.URL+"/api/mcp", hamcp.Options{
+	// Connect to HA via REST (replaces MCP — REST sees ALL entities, not just Assist-exposed)
+	haCli := hare.New(a.cfg.HA.URL, hare.Options{
 		Token:  a.cfg.HA.Token,
 		Logger: a.logger,
 	})
+	// Quick connectivity check
+	_, err := haCli.States(ctx)
 	if err != nil {
-		a.logger.Error("failed to connect to HA via MCP", "error", err)
-		return err
+		a.logger.Warn("HA REST connectivity check", "error", err)
+		// non-fatal: may be transient
 	}
-	a.mcp = mcpCli
-	defer mcpCli.Close()
+	a.ha = haCli
 
 	// Init LLM client (provider chosen from config)
 	llmClient, err := newLLMClient(&a.cfg.LLM, a.logger)
@@ -63,9 +64,10 @@ func (a *App) Run() error {
 	// Scheduler engine
 	statePath := filepath.Join(a.cfg.DataDir, "scheduler_jobs.json")
 
-	// Late-bound hooks: scheduler is created before the agent and TG bot.
+	// Late-bound hooks
 	var agentExecutor func(ctx context.Context, prompt string) (string, error)
 	var sendToChat func(ctx context.Context, chatID int64, text string)
+	var agentRef *llm.Agent
 
 	sched := scheduler.New(func(ctx context.Context, action scheduler.Action) error {
 		if action.AgentPrompt != "" {
@@ -79,15 +81,17 @@ func (a *App) Run() error {
 			if result != "" && sendToChat != nil {
 				chatID := action.ChatID
 				if chatID == 0 {
-					chatID = tgOwnerChatID(a.cfg) // fallback: first allowed user
+					chatID = tgOwnerChatID(a.cfg)
 				}
 				sendToChat(ctx, chatID, result)
 			}
 			return nil
 		}
 		a.logger.Info("scheduler: executing action", "tool", action.Tool, "args", action.Args)
-		normalizeArgs(action.Args)
-		_, err := mcpCli.CallTool(ctx, action.Tool, action.Args)
+		if agentRef == nil {
+			return fmt.Errorf("agent not initialized")
+		}
+		_, err := agentRef.ExecuteToolPublic(ctx, action.Tool, action.Args)
 		return err
 	}, statePath)
 	a.sched = sched
@@ -96,12 +100,13 @@ func (a *App) Run() error {
 	// LLM agent
 	histStore, err := newHistoryStore(a.cfg, a.logger)
 	if err != nil {
-		a.logger.Warn("history store init", "error", err) // non-fatal
+		a.logger.Warn("history store init", "error", err)
 	}
 	if histStore != nil {
 		defer histStore.Close()
 	}
-	agent := llm.NewAgent(llmClient, mcpCli, sched, a.cfg.HA.URL, histStore)
+	agent := llm.NewAgent(llmClient, haCli, sched, histStore)
+	agentRef = agent
 	agentExecutor = func(ctx context.Context, prompt string) (string, error) {
 		return agent.HandleMessage(ctx, prompt)
 	}
@@ -122,7 +127,7 @@ func (a *App) Run() error {
 	tgBot, err := tg.New(
 		a.cfg.TG.Token,
 		a.cfg.TG.AllowUserIDs,
-		mcpCli,
+		haCli,
 		tg.WithAgent(agent),
 		tg.WithScheduler(sched),
 		tg.WithNotify(nf),
@@ -137,7 +142,6 @@ func (a *App) Run() error {
 		tgBot.SendMessage(ctx, chatID, text)
 	}
 
-	// Wire notification sender
 	nf.SetSender(func(ctx context.Context, text string) {
 		a.tg.SendNotification(ctx, text)
 	})
@@ -166,7 +170,6 @@ func newHistoryStore(cfg *config.Config, log *slog.Logger) (llm.HistoryStore, er
 	return llm.NewFileStore(filepath.Join(cfg.DataDir, "history"), log)
 }
 
-// tgOwnerChatID returns the first allowed user ID (owner) for fallback sends.
 func tgOwnerChatID(cfg *config.Config) int64 {
 	if len(cfg.TG.AllowUserIDs) == 0 {
 		return 0
@@ -174,17 +177,6 @@ func tgOwnerChatID(cfg *config.Config) int64 {
 	return cfg.TG.AllowUserIDs[0]
 }
 
-// normalizeArgs приводит аргументы к формату, который принимает HA MCP:
-// - domain, device_class: строка превращается в массив ["light"]
-func normalizeArgs(args map[string]any) {
-	for _, key := range []string{"domain", "device_class"} {
-		if v, ok := args[key].(string); ok && v != "" {
-			args[key] = []string{v}
-		}
-	}
-}
-
-// newLLMClient создаёт LLM-клиент по конфигурации провайдера.
 func newLLMClient(cfg *config.LLMConfig, log *slog.Logger) (llm.LLMClient, error) {
 	switch cfg.Provider {
 	case "gigachat":

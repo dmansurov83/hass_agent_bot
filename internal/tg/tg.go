@@ -11,7 +11,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 
-	hamcp "hass-agent-bot/internal/ha/mcp"
+	hare "hass-agent-bot/internal/ha/rest"
 	"hass-agent-bot/internal/llm"
 	"hass-agent-bot/internal/notify"
 	"hass-agent-bot/internal/scheduler"
@@ -19,7 +19,7 @@ import (
 
 type Bot struct {
 	cli    *bot.Bot
-	mcp    *hamcp.Client
+	ha     *hare.Client
 	agent  *llm.Agent
 	sched  *scheduler.Engine
 	notify *notify.Engine
@@ -42,9 +42,9 @@ func WithNotify(ne *notify.Engine) Option {
 	return func(b *Bot) { b.notify = ne }
 }
 
-func New(token string, allowIDs []int64, mcpCli *hamcp.Client, opts ...Option) (*Bot, error) {
+func New(token string, allowIDs []int64, haCli *hare.Client, opts ...Option) (*Bot, error) {
 	b := &Bot{
-		mcp:   mcpCli,
+		ha:    haCli,
 		allow: make(map[int64]bool, len(allowIDs)),
 		log:   slog.Default(),
 	}
@@ -153,23 +153,36 @@ func (b *Bot) helpHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 func (b *Bot) listHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
 
-	if b.mcp == nil {
+	if b.ha == nil {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Home Assistant не подключён."})
 		return
 	}
 
-	out, err := b.mcp.CallTool(ctx, "GetLiveContext", map[string]any{})
+	states, err := b.ha.States(ctx)
 	if err != nil {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("Ошибка получения списка устройств: %v", err)})
 		return
 	}
 
-	if strings.TrimSpace(out) == "" {
-		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Нет доступных устройств (проверь Exposed entities в HA)."})
+	if len(states) == 0 {
+		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Нет доступных устройств."})
 		return
 	}
 
-	// GetLiveContext returns a full overview; show it (truncate if huge)
+	// Перечисляем все устройства с human-friendly названиями
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Устройств в Home Assistant: %d\n\n", len(states)))
+	for _, s := range states {
+		fn := s.Attributes["friendly_name"]
+		name := s.EntityID
+		if f, ok := fn.(string); ok && f != "" {
+			name = f
+		}
+		sb.WriteString(fmt.Sprintf("— %s (%s): %s\n", name, s.EntityID, s.State))
+	}
+
+	out := sb.String()
+	// truncate if huge
 	const maxLen = 3800
 	if len(out) > maxLen {
 		out = out[:maxLen] + "\n…"
@@ -180,7 +193,7 @@ func (b *Bot) listHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 func (b *Bot) statusHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
 
-	if b.mcp == nil {
+	if b.ha == nil {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Home Assistant не подключён."})
 		return
 	}
@@ -188,7 +201,7 @@ func (b *Bot) statusHandler(ctx context.Context, tgBot *bot.Bot, update *models.
 	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	if _, err := b.mcp.CallTool(ctxTimeout, "GetLiveContext", map[string]any{}); err != nil {
+	if _, err := b.ha.States(ctxTimeout); err != nil {
 		tgBot.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("Home Assistant: недоступен (%v)", err)})
 		return
 	}

@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	hamcp "hass-agent-bot/internal/ha/mcp"
+	hare "hass-agent-bot/internal/ha/rest"
 )
 
 type cfg struct {
@@ -26,22 +26,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	cli, err := hamcp.New(context.Background(), c.HA.URL+"/api/mcp", hamcp.Options{Token: c.HA.Token})
-	if err != nil {
-		fmt.Println("mcp:", err)
-		os.Exit(1)
-	}
-	defer cli.Close()
+	cli := hare.New(c.HA.URL, hare.Options{Token: c.HA.Token})
 
-	tools, err := cli.ListTools(context.Background())
+	states, err := cli.States(context.Background())
 	if err != nil {
-		fmt.Println("list:", err)
+		fmt.Println("states:", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("TOOLS COUNT:", len(tools))
-	for _, t := range tools {
-		b, _ := json.Marshal(t)
-		fmt.Printf("--- %s ---\n%s\n\n", t.Name, string(b))
+	fmt.Println("TOTAL ENTITIES:", len(states))
+	// Print first 20 to inspect structure
+	n := len(states)
+	if n > 20 {
+		n = 20
+	}
+	for _, s := range states[:n] {
+		b, _ := json.MarshalIndent(s, "", "  ")
+		fmt.Printf("%s\n", string(b))
 	}
 }

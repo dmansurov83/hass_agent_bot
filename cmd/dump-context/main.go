@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"gopkg.in/yaml.v3"
 
-	hamcp "hass-agent-bot/internal/ha/mcp"
+	hare "hass-agent-bot/internal/ha/rest"
 )
 
 type cfg struct {
@@ -27,34 +25,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	cli, err := hamcp.New(context.Background(), c.HA.URL+"/api/mcp", hamcp.Options{Token: c.HA.Token})
+	cli := hare.New(c.HA.URL, hare.Options{Token: c.HA.Token})
+
+	states, err := cli.States(context.Background())
 	if err != nil {
-		fmt.Println("mcp:", err)
+		fmt.Println("states:", err)
 		os.Exit(1)
 	}
-	defer cli.Close()
 
-	for _, name := range []string{"GetLiveContext", "HassTurnOn", "list_entities", "get_state"} {
-		res, err := cli.Raw().CallTool(context.Background(), mcp.CallToolRequest{
-			Params: mcp.CallToolParams{Name: name, Arguments: map[string]any{}},
-		})
-		if err != nil {
-			fmt.Printf("[%s] call error: %v\n\n", name, err)
-			continue
+	// Dump everything: entity_id, friendly_name, state, unit, device_class
+	for _, s := range states {
+		fn := ""
+		if f, ok := s.Attributes["friendly_name"].(string); ok {
+			fn = f
 		}
-		fmt.Printf("[%s] IsError=%v Structured=%v len(content)=%d\n", name, res.IsError, res.StructuredContent != nil, len(res.Content))
-		if res.StructuredContent != nil {
-			b, _ := json.MarshalIndent(res.StructuredContent, "", "  ")
-			fmt.Printf("%s\n", string(b))
-		} else if len(res.Content) > 0 {
-			switch c := res.Content[0].(type) {
-			case mcp.TextContent:
-				fmt.Printf("TEXT: %.400s\n", c.Text)
-			default:
-				b, _ := json.Marshal(res.Content[0])
-				fmt.Printf("OTHER: %.400s\n", string(b))
-			}
+		unit := ""
+		if u, ok := s.Attributes["unit_of_measurement"].(string); ok {
+			unit = u
 		}
-		fmt.Println()
+		dc := ""
+		if d, ok := s.Attributes["device_class"].(string); ok {
+			dc = d
+		}
+		fmt.Printf("%s | %s | %s | %s | %s\n", s.EntityID, fn, s.State, unit, dc)
 	}
 }

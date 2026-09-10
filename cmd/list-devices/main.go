@@ -2,15 +2,13 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"gopkg.in/yaml.v3"
 
-	hamcp "hass-agent-bot/internal/ha/mcp"
+	hare "hass-agent-bot/internal/ha/rest"
 )
 
 type cfg struct {
@@ -23,59 +21,33 @@ type cfg struct {
 func main() {
 	data, _ := os.ReadFile("config.yaml")
 	var c cfg
-	_ = yaml.Unmarshal(data, &c)
-
-	cli, err := hamcp.New(context.Background(), c.HA.URL+"/api/mcp", hamcp.Options{Token: c.HA.Token})
-	if err != nil {
-		fmt.Println("mcp:", err)
+	if err := yaml.Unmarshal(data, &c); err != nil {
+		fmt.Println("cfg:", err)
 		os.Exit(1)
 	}
-	defer cli.Close()
 
-	res, err := cli.Raw().CallTool(context.Background(), mcp.CallToolRequest{
-		Params: mcp.CallToolParams{Name: "GetLiveContext", Arguments: map[string]any{}},
-	})
+	cli := hare.New(c.HA.URL, hare.Options{Token: c.HA.Token})
+
+	states, err := cli.States(context.Background())
 	if err != nil {
-		fmt.Println("err:", err)
-		return
-	}
-	ctxText := ""
-	for _, content := range res.Content {
-		if tc, ok := content.(mcp.TextContent); ok {
-			ctxText += tc.Text
-		}
+		fmt.Println("states:", err)
+		os.Exit(1)
 	}
 
-	// Вывести все сущности light/switch с районами
-	lines := strings.Split(ctxText, "\n")
-	for i, line := range lines {
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, "domain: light") || strings.Contains(lower, "domain: switch") || strings.Contains(lower, "domain: fan") {
-			// Найти name в этой строке или в предыдущих
-			name := ""
-			for back := i; back >= 0 && back > i-3; back-- {
-				trimmed := strings.TrimSpace(lines[back])
-				if strings.HasPrefix(trimmed, "names:") {
-					name = strings.TrimSpace(trimmed[6:])
-					break
-				}
+	// Вывести все сущности light/switch/fan с районами (friendly_name + entity_id)
+	fmt.Printf("%-45s | %-30s | %-12s | %s\n", "entity_id", "friendly_name", "state", "device_class")
+	for _, s := range states {
+		lower := strings.ToLower(s.EntityID)
+		if strings.HasPrefix(lower, "light.") || strings.HasPrefix(lower, "switch.") || strings.HasPrefix(lower, "fan.") {
+			fn := ""
+			if f, ok := s.Attributes["friendly_name"].(string); ok {
+				fn = f
 			}
-			// area в текущей или следующих строках
-			area := ""
-			for fwd := i; fwd < len(lines) && fwd < i+4; fwd++ {
-				trimmed := strings.TrimSpace(lines[fwd])
-				if strings.HasPrefix(trimmed, "areas:") {
-					area = strings.TrimSpace(trimmed[6:])
-					break
-				}
+			dc := ""
+			if d, ok := s.Attributes["device_class"].(string); ok {
+				dc = d
 			}
-			state := ""
-			if strings.Contains(lower, "state:") {
-				idx := strings.Index(lower, "state:")
-				state = strings.TrimSpace(line[idx+6:])
-			}
-			fmt.Printf("%-40s | %-20s | %-12s | %s\n", name, strings.TrimSpace(lower[strings.Index(lower, "domain:")+7:]), area, state)
-			_ = json.Marshal
+			fmt.Printf("%-45s | %-30s | %-12s | %s\n", s.EntityID, fn, s.State, dc)
 		}
 	}
 }

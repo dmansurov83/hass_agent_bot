@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"gopkg.in/yaml.v3"
 
-	hamcp "hass-agent-bot/internal/ha/mcp"
+	hare "hass-agent-bot/internal/ha/rest"
 )
 
 type cfg struct {
@@ -22,37 +21,23 @@ type cfg struct {
 func main() {
 	data, _ := os.ReadFile("config.yaml")
 	var c cfg
-	_ = yaml.Unmarshal(data, &c)
-
-	cli, err := hamcp.New(context.Background(), c.HA.URL+"/api/mcp", hamcp.Options{Token: c.HA.Token})
-	if err != nil {
-		fmt.Println("mcp:", err)
+	if err := yaml.Unmarshal(data, &c); err != nil {
+		fmt.Println("cfg:", err)
 		os.Exit(1)
 	}
-	defer cli.Close()
+
+	cli := hare.New(c.HA.URL, hare.Options{Token: c.HA.Token})
 
 	// Try exact entity_id names from the live context
 	tests := []map[string]any{
-		{"name": "switch_hall_main"},
-		{"name": "switch_hall_main", "domain": "light"},
-		{"name": "my_kitchen_light"},
-		{"name": "Light", "area": "Туалет"},
-		{"name": "Table-Led table-led-light"},
+		{"entity_id": []string{"switch_hall_main"}},
+		{"entity_id": []string{"light.living_room"}},
+		{"entity_id": []string{"switch"}},
 	}
 
 	for _, args := range tests {
-		res, err := cli.Raw().CallTool(context.Background(), mcp.CallToolRequest{
-			Params: mcp.CallToolParams{Name: "HassTurnOn", Arguments: args},
-		})
-		out := ""
-		if res != nil {
-			for _, content := range res.Content {
-				if tc, ok := content.(mcp.TextContent); ok {
-					out += tc.Text
-				}
-			}
-		}
+		err := cli.CallService(context.Background(), "light", "turn_on", args)
 		j, _ := json.Marshal(args)
-		fmt.Printf("args=%s err=%v isError=%v out=%s\n", string(j), err, res != nil && res.IsError, out)
+		fmt.Printf("args=%s err=%v\n", string(j), err)
 	}
 }
