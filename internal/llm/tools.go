@@ -100,19 +100,16 @@ func SchedulerFunction() Function {
 					"type":        "string",
 					"description": "Cron-выражение из 6 полей: секунды минуты часы день месяца месяц день недели. Например '0 0 7 * * 1-5' — каждый будний день в 7:00. Не используется для delay.",
 				},
-				"action": map[string]any{
-					"type":        "object",
-					"description": "Действие, которое нужно запустить. Содержит name (имя инструмента HA, например HassTurnOn) и arguments (параметры для этого инструмента)",
-					"properties": map[string]any{
-						"name": map[string]any{"type": "string", "description": "Имя инструмента HA: HassTurnOn, HassTurnOff, HassLightSet, HassClimateSetTemperature, HassSetVolume, HassBroadcast и т.д."},
-						"arguments": map[string]any{
-							"type": "object",
-							"description": "Аргументы, которые передаются инструменту. Для HassTurnOn/HassTurnOff: name (название устройства), area (зона), domain (домен); для HassLightSet: name/area, brightness (0-100), temperature (цветовая температура), color; для GetLiveContext: name, domain, area",
-							"properties": map[string]any{},
-						},
-					},
-					"required": []string{"name"},
+"action": map[string]any{
+				"type":        "object",
+				"description": "Действие для выполнения. Поле tool — имя инструмента HA. Все остальные поля — аргументы для него (например name — название устройства, area — зона, domain — домен).",
+				"properties": map[string]any{
+					"tool": map[string]any{"type": "string", "description": "Имя инструмента HA: HassTurnOn, HassTurnOff, HassLightSet, HassClimateSetTemperature, HassSetVolume, HassBroadcast и т.д."},
+					"name": map[string]any{"type": "string", "description": "Название устройства (если требуется инструментом)"},
+					"area": map[string]any{"type": "string", "description": "Зона/комната (если требуется)"},
 				},
+				"additionalProperties": true,
+			},
 				"label": map[string]any{
 					"type":        "string",
 					"description": "Название таймера для отображения в списке",
@@ -163,7 +160,7 @@ func SystemPrompt() Message {
 8. Если пользователь просит «покажи все устройства» — вызови GetLiveContext без аргументов и ПЕРЕЧИСЛИ устройства кратко списком.
 9. Не придумывай результаты — полагайся на ответ инструментов.
 10. Если инструмент вернул ошибку — честно скажи об этом.
-11. Для отложенных действий используй schedule_action (действие содержит name — имя инструмента HA, и arguments — его параметры).
+11. Для отложенных действий используй schedule_action. Поле action — это объект с tool (имя инструмента HA) и аргументами плоскими полями, например: {"tool": "HassTurnOn", "name": "switch_hall_main", "area": "Гостиная"}.
 12. Если пользователь не указал, какое именно устройство — уточни.`,
 	}
 }

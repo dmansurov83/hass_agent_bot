@@ -180,21 +180,29 @@ func TestExtractToolArgs_JSONString(t *testing.T) {
 
 func TestExtractToolArgs_FlatFallback(t *testing.T) {
 	args := extractToolArgs(map[string]any{
-		"name": "HassTurnOn",
+		"tool": "HassTurnOn",
+		"name": "Light",
 		"area": "Гостиная",
 	})
-	if args["area"] != "Гостиная" {
+	// name должно быть в args как аргумент HassTurnOn
+	if args["name"] != "Light" || args["area"] != "Гостиная" {
 		t.Errorf("wrong args: %v", args)
 	}
-	if _, ok := args["name"]; ok {
-		t.Errorf("'name' should not leak into args: %v", args)
+	if _, ok := args["tool"]; ok {
+		t.Errorf("'tool' should not leak into args: %v", args)
 	}
 }
 
 func TestExtractToolArgs_Empty(t *testing.T) {
-	args := extractToolArgs(map[string]any{"name": "GetDateTime"})
+	// name — это аргумент, а не служебное поле; только tool убирается
+	args := extractToolArgs(map[string]any{"tool": "GetDateTime"})
 	if len(args) != 0 {
 		t.Errorf("expected empty args, got %v", args)
+	}
+	// name без tool — остаётся как аргумент
+	args = extractToolArgs(map[string]any{"name": "Привет"})
+	if len(args) != 1 {
+		t.Errorf("expected 1 arg (name), got %v", args)
 	}
 }
 

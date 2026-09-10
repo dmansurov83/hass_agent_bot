@@ -110,6 +110,8 @@ func (a *Agent) executeTool(ctx context.Context, fc *FunctionCall) (string, erro
 
 	switch fc.Name {
 	case "schedule_action":
+		// сбросим полные аргументы в лог для диагностики
+		a.log.Info("agent: schedule_action full args", "raw_fc_arguments", fc.Arguments)
 		return a.handleSchedule(ctx, fc.Arguments)
 
 	default:
@@ -131,9 +133,13 @@ func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string
 	}
 
 	// Extract HA tool name and args from the action
-	toolName, _ := actionRaw["name"].(string)
+	toolName, _ := actionRaw["tool"].(string)
 	if toolName == "" {
-		return "", fmt.Errorf("у action должно быть поле 'name' с именем инструмента HA (например HassTurnOn)")
+		// fallback: попробовать "name" (старый формат)
+		toolName, _ = actionRaw["name"].(string)
+	}
+	if toolName == "" {
+		return "", fmt.Errorf("у action должно быть поле 'tool' с именем инструмента HA (например HassTurnOn)")
 	}
 
 	toolArgs := extractToolArgs(actionRaw)
@@ -190,11 +196,11 @@ func extractToolArgs(action map[string]any) map[string]any {
 	if v, ok := action["args"].(map[string]any); ok && len(v) > 0 {
 		return v
 	}
-	// 4. Всё кроме "name" и служебных полей лежит прямо в action
+	// 4. Всё кроме "tool" и служебных полей лежит прямо в action (name — уже аргумент устройства)
 	args := make(map[string]any)
 	for k, v := range action {
 		switch k {
-		case "name", "arguments", "args":
+		case "tool", "arguments", "args":
 			continue
 		}
 		args[k] = v
