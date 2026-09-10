@@ -1,7 +1,7 @@
 # Конфиг Docker-сборки.
 # Скрипт docker-build.ps1 читает версию и имя образа отсюда.
 
-version: "0.3.0"
+version: "0.3.1"
 
 # имя образа в Docker Hub (без тега)
 image: dmansurov83/hass-agent-bot

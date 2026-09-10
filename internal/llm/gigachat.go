@@ -74,6 +74,14 @@ func NewGigaChatClient(opts Options) (*GigaChatClient, error) {
 	}, nil
 }
 
+// invalidateToken drops the cached token so the next getToken fetches a new one.
+func (c *GigaChatClient) invalidateToken() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.token = ""
+	c.expires = time.Time{}
+}
+
 // getToken returns a valid access token, refreshing it if expired.
 func (c *GigaChatClient) getToken(ctx context.Context) (string, error) {
 	c.mu.Lock()
@@ -164,7 +172,24 @@ func (c *GigaChatClient) Chat(ctx context.Context, messages []Message, functions
 		return nil, err
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusUnauthorized {
+		// Token expired or invalid — refresh and retry once.
+		c.invalidateToken()
+		token, err = c.getToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err = c.http.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("llm: chat request (retry): %w", err)
+		}
+		defer resp.Body.Close()
+		data, err = io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		if err != nil {
+			return nil, err
+		}
+	} else if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("llm: chat failed: status=%d body=%s", resp.StatusCode, string(data))
 	}
 
