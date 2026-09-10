@@ -43,7 +43,7 @@ type NotifyConfig struct {
 
 func Load(path string) (*Config, error) {
 	cfg := &Config{
-		Version: "0.1.0",
+		Version: "0.3.0",
 		HA: HAConfig{
 			URL: "http://localhost:8123",
 		},
