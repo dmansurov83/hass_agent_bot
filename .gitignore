@@ -18,6 +18,11 @@ config.yaml
 .env
 *.local.yaml
 
+# Runtime data
+scheduler_jobs.json
+*.log
+*.err.log
+
 # OS
 .DS_Store
 Thumbs.db

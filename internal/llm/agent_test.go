@@ -155,6 +155,49 @@ func TestAgent_Reset(t *testing.T) {
 	}
 }
 
+func TestExtractToolArgs_Map(t *testing.T) {
+	args := extractToolArgs(map[string]any{
+		"name":      "HassTurnOn",
+		"arguments": map[string]any{"name": "Light", "area": "Туалет"},
+	})
+	if args["name"] != "Light" || args["area"] != "Туалет" {
+		t.Errorf("wrong args: %v", args)
+	}
+	if len(args) != 2 {
+		t.Errorf("expected 2 args, got %d: %v", len(args), args)
+	}
+}
+
+func TestExtractToolArgs_JSONString(t *testing.T) {
+	args := extractToolArgs(map[string]any{
+		"name":      "HassTurnOn",
+		"arguments": `{"name": "Light", "area": "Туалет"}`,
+	})
+	if args["name"] != "Light" || args["area"] != "Туалет" {
+		t.Errorf("wrong args: %v", args)
+	}
+}
+
+func TestExtractToolArgs_FlatFallback(t *testing.T) {
+	args := extractToolArgs(map[string]any{
+		"name": "HassTurnOn",
+		"area": "Гостиная",
+	})
+	if args["area"] != "Гостиная" {
+		t.Errorf("wrong args: %v", args)
+	}
+	if _, ok := args["name"]; ok {
+		t.Errorf("'name' should not leak into args: %v", args)
+	}
+}
+
+func TestExtractToolArgs_Empty(t *testing.T) {
+	args := extractToolArgs(map[string]any{"name": "GetDateTime"})
+	if len(args) != 0 {
+		t.Errorf("expected empty args, got %v", args)
+	}
+}
+
 func stringsContains(s, substr string) bool {
 	return len(s) >= len(substr) && contains(s, substr)
 }

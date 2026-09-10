@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -122,6 +123,8 @@ func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string
 		return "", fmt.Errorf("scheduler не инициализирован")
 	}
 
+	a.log.Info("agent: schedule_action raw args", "args", args)
+
 	actionRaw, ok := args["action"].(map[string]any)
 	if !ok {
 		return "", fmt.Errorf("action is required")
@@ -129,11 +132,11 @@ func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string
 
 	// Extract HA tool name and args from the action
 	toolName, _ := actionRaw["name"].(string)
-	toolArgs, _ := actionRaw["arguments"].(map[string]any)
 	if toolName == "" {
-		// Fallback: try domain/service pattern
 		return "", fmt.Errorf("у action должно быть поле 'name' с именем инструмента HA (например HassTurnOn)")
 	}
+
+	toolArgs := extractToolArgs(actionRaw)
 
 	act := scheduler.Action{
 		Tool: toolName,
@@ -166,6 +169,37 @@ func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string
 	default:
 		return "", fmt.Errorf("укажи delay или cron для schedule_action")
 	}
+}
+
+// extractToolArgs находит аргументы HA-инструмента в действии при разных форматах,
+// которые может прислать LLM: {"arguments": {...}}, {"arguments": "<json-строка>"},
+// {"args": {...}} или всё кроме "name" лежит прямо в action.
+func extractToolArgs(action map[string]any) map[string]any {
+	// 1. {"arguments": {...}}
+	if v, ok := action["arguments"].(map[string]any); ok && len(v) > 0 {
+		return v
+	}
+	// 2. {"arguments": "<json-строка>"}
+	if v, ok := action["arguments"].(string); ok && v != "" {
+		var parsed map[string]any
+		if json.Unmarshal([]byte(v), &parsed) == nil {
+			return parsed
+		}
+	}
+	// 3. {"args": {...}}
+	if v, ok := action["args"].(map[string]any); ok && len(v) > 0 {
+		return v
+	}
+	// 4. Всё кроме "name" и служебных полей лежит прямо в action
+	args := make(map[string]any)
+	for k, v := range action {
+		switch k {
+		case "name", "arguments", "args":
+			continue
+		}
+		args[k] = v
+	}
+	return args
 }
 
 func strVal(v any) string {
