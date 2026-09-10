@@ -3,17 +3,21 @@ FROM golang:1.27-alpine AS build
 
 WORKDIR /src
 
-# Кэшируем зависимости отдельно
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
 
-# Статическая сборка без CGO для чистого scratch-образа
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/hass-agent-bot ./cmd/bot
 
 # ---- runtime stage ----
-FROM scratch
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata
+
+# Сертификат Минцифры (нужен для GigaChat API: ngw.devices.sberbank.ru:9443)
+COPY russian_trusted_root_ca_pem.crt /usr/local/share/ca-certificates/russian_trusted_root_ca_pem.crt
+RUN update-ca-certificates
 
 COPY --from=build /out/hass-agent-bot /hass-agent-bot
 
