@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +61,7 @@ type Agent struct {
 	llm   LLMClient
 	mcp   *hamcp.Client
 	sched Scheduler
+	haURL string
 	log   *slog.Logger
 
 	mu        sync.Mutex
@@ -65,11 +69,12 @@ type Agent struct {
 	store     HistoryStore        // persistence (nil = don't save)
 }
 
-func NewAgent(llm LLMClient, mcpCli *hamcp.Client, sched Scheduler, store HistoryStore) *Agent {
+func NewAgent(llm LLMClient, mcpCli *hamcp.Client, sched Scheduler, haURL string, store HistoryStore) *Agent {
 	a := &Agent{
 		llm:       llm,
 		mcp:       mcpCli,
 		sched:     sched,
+		haURL:     haURL,
 		log:       slog.Default(),
 		histories: make(map[int64][]Message),
 		store:     store,
@@ -224,6 +229,9 @@ func (a *Agent) executeTool(ctx context.Context, fc *FunctionCall) (string, erro
 		a.log.Info("agent: schedule_ai_action full args", "raw_fc_arguments", fc.Arguments)
 		return a.handleScheduleAI(ctx, fc.Arguments)
 
+	case "HassGetWeather":
+		return a.getWeather(ctxTool, fc.Arguments)
+
 	default:
 		// All HA tools (HassTurnOn, HassLightSet, GetLiveContext, ...) proxy directly to MCP
 		return a.mcp.CallTool(ctxTool, fc.Name, normalizeArgs(fc.Arguments))
@@ -240,6 +248,139 @@ func normalizeArgs(args map[string]any) map[string]any {
 		}
 	}
 	return normalized
+}
+
+// getWeather возвращает текущую погоду и почасовой прогноз из Home Assistant.
+// HA MCP-сервер не отдаёт weather-домен, поэтому читаем /api/states/weather.*
+// напрямую по REST API (токен тот же, что и для MCP).
+func (a *Agent) getWeather(ctx context.Context, args map[string]any) (string, error) {
+	hours := 12
+	if h, ok := args["hours"].(float64); ok && h > 0 {
+		hours = int(h)
+	}
+	if hours > 48 {
+		hours = 48
+	}
+
+	weatherStates, err := a.haStates(ctx, "weather")
+	if err != nil {
+		return "", err
+	}
+	if len(weatherStates) == 0 {
+		return "В Home Assistant нет сущностей погоды (weather).", nil
+	}
+
+	// Формируем сводку: текущее состояние первой погодной сущности + прогноз.
+	type haState struct {
+		EntityID   string         `json:"entity_id"`
+		State      string         `json:"state"`
+		Attributes map[string]any `json:"attributes"`
+	}
+	var lines []string
+	for _, ws := range weatherStates[:min(len(weatherStates), 2)] {
+		name, _ := ws.Attributes["friendly_name"].(string)
+		if name == "" {
+			name = ws.EntityID
+		}
+		lines = append(lines, fmt.Sprintf("— %s (%s): %s", name, ws.EntityID, ws.State))
+
+		var attrs []string
+		for _, k := range []string{"temperature", "feels_like", "condition", "humidity", "pressure", "wind_speed", "wind_bearing", "visibility", "precipitation"} {
+			if v, ok := ws.Attributes[k]; ok {
+				attrs = append(attrs, fmt.Sprintf("%s=%v", k, v))
+			}
+		}
+		if len(attrs) > 0 {
+			lines = append(lines, "  "+strings.Join(attrs, ", "))
+		}
+
+		if fh, ok := ws.Attributes["forecastHourly"].([]any); ok && len(fh) > 0 {
+			lines = append(lines, "  Почасовой прогноз:")
+			n := min(hours, len(fh))
+			for _, item := range fh[:n] {
+				m, _ := item.(map[string]any)
+				if m == nil {
+					continue
+				}
+				dt, _ := m["datetime"].(string)
+				temp, _ := m["native_temperature"].(float64)
+				cond, _ := m["condition"].(string)
+				wind, _ := m["native_wind_speed"].(float64)
+				// нормализуем время до "HH:MM"
+				t, err := time.Parse("2006-01-02T15:04:05-07:00", dt)
+				if err != nil {
+					if t2, err2 := time.Parse(time.RFC3339, dt); err2 == nil {
+						t = t2
+					}
+				}
+				when := dt
+				if !t.IsZero() {
+					when = t.Format("2006-01-02 15:04")
+				}
+				lines = append(lines, fmt.Sprintf("    %s: %g°C, %s, ветер %g км/ч", when, temp, cond, wind))
+			}
+		}
+	}
+
+	return strings.Join(lines, "\n"), nil
+}
+
+// haWeatherState — минимальная структура сущности из REST API HA.
+func (a *Agent) haStates(ctx context.Context, domain string) ([]struct {
+	EntityID   string         `json:"entity_id"`
+	State      string         `json:"state"`
+	Attributes map[string]any `json:"attributes"`
+}, error) {
+	base := a.haURL
+	if base == "" {
+		return nil, fmt.Errorf("HA URL не настроен для погоды")
+	}
+	reqURL := strings.TrimSuffix(base, "/") + "/api/states"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.mcp.Token())
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HA REST: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("HA REST: read body: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HA REST: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var all []struct {
+		EntityID   string         `json:"entity_id"`
+		State      string         `json:"state"`
+		Attributes map[string]any `json:"attributes"`
+	}
+	if err := json.Unmarshal(body, &all); err != nil {
+		return nil, fmt.Errorf("HA REST: parse states: %w", err)
+	}
+
+	// фильтруем по домену weather.*
+	prefix := domain + "."
+	out := make([]struct {
+		EntityID   string         `json:"entity_id"`
+		State      string         `json:"state"`
+		Attributes map[string]any `json:"attributes"`
+	}, 0, len(all))
+	for _, s := range all {
+		if strings.HasPrefix(s.EntityID, prefix) {
+			out = append(out, s)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].EntityID < out[j].EntityID })
+	return out, nil
 }
 
 func (a *Agent) handleSchedule(ctx context.Context, args map[string]any) (string, error) {

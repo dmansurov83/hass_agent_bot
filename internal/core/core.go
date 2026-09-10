@@ -101,7 +101,7 @@ func (a *App) Run() error {
 	if histStore != nil {
 		defer histStore.Close()
 	}
-	agent := llm.NewAgent(llmClient, mcpCli, sched, histStore)
+	agent := llm.NewAgent(llmClient, mcpCli, sched, a.cfg.HA.URL, histStore)
 	agentExecutor = func(ctx context.Context, prompt string) (string, error) {
 		return agent.HandleMessage(ctx, prompt)
 	}

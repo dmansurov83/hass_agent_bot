@@ -101,3 +101,8 @@ func (c *Client) Close() error {
 func (c *Client) Raw() *client.Client {
 	return c.mcp
 }
+
+// Token returns the HA long-lived access token used by this client.
+func (c *Client) Token() string {
+	return c.token
+}

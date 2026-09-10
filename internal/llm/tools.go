@@ -167,22 +167,44 @@ func SchedulerAIFunction() Function {
 	}
 }
 
+// WeatherFunction returns the function definition for the built-in weather
+// tool. It reads the current conditions and forecast from the Home Assistant
+// REST API (the HA MCP server exposes no weather/forecast tool), so the LLM can
+// answer questions like "какая погода на улице?".
+func WeatherFunction() Function {
+	return Function{
+		Name:        "HassGetWeather",
+		Description: "Получить текущую погоду и прогноз (температура, ощущается как, ветер, влажность, давление, осадки, почасовой прогноз) от Home Assistant. Вызывай, когда пользователь спрашивает про погоду, температуру на улице, прогноз, дождь, ветер.",
+		Parameters: FunctionParameters(
+			map[string]any{
+				"hours": map[string]any{
+					"type":        "integer",
+					"description": "Сколько часов прогноза вернуть (по умолчанию 12, максимум 48). Необязательно.",
+				},
+			},
+			nil,
+		),
+	}
+}
+
 // HAOnlyFunctions returns only HA tools (no scheduler tools). Used during background
 // AI task execution where scheduling is not allowed.
 func HAOnlyFunctions(mcpTools []mcp.Tool) []Function {
-	fns := make([]Function, 0, len(mcpTools))
+	fns := make([]Function, 0, len(mcpTools)+1)
 	for _, t := range mcpTools {
 		fns = append(fns, ToFunction(t))
 	}
+	fns = append(fns, WeatherFunction())
 	return fns
 }
 
 // AllFunctions returns HA tools + the scheduler tools for the LLM agent.
 func AllFunctions(mcpTools []mcp.Tool) []Function {
-	fns := make([]Function, 0, len(mcpTools)+2)
+	fns := make([]Function, 0, len(mcpTools)+3)
 	for _, t := range mcpTools {
 		fns = append(fns, ToFunction(t))
 	}
+	fns = append(fns, WeatherFunction())
 	fns = append(fns, SchedulerFunction())
 	fns = append(fns, SchedulerAIFunction())
 	return fns
@@ -205,6 +227,7 @@ func SystemPrompt() Message {
 - HassCancelAllTimers — отменить все таймеры
 - GetLiveContext — получить ТЕКУЩЕЕ состояние устройств, датчиков, областей (аргументы: name, domain, area)
 - GetDateTime — текущие дата и время
+- HassGetWeather — погода и прогноз (температура, ветер, осадки) через Home Assistant
 - schedule_action — запланировать действие в будущем (at — одноразово в время HH:MM, delay — через N минут, cron — по расписанию)
 - schedule_ai_action — запланировать ФОНОВУЮ AI-задачу: в заданное время ты сам проверишь состояние дома и пришлёшь результат в чат (поле prompt — что проверить и при каком условии писать)
 

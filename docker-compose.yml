@@ -5,7 +5,6 @@ services:
     restart: unless-stopped
     environment:
       - TZ=Europe/Moscow
-      - APP_VERSION=${APP_VERSION:-0.3.1}
       - HA_URL=${HA_URL}
       - HA_TOKEN=${HA_TOKEN}
       - TG_TOKEN=${TG_TOKEN}
