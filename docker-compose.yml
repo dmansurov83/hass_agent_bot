@@ -19,4 +19,4 @@ services:
       - ./config.yaml:/config.yaml:ro
       # персистентность таймеров
       - ./data:/data
-    command: ["--config", "/config.yaml"]
+    command: ["--config", "/config.yaml", "--console=false"]

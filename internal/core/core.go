@@ -7,9 +7,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 
+	"hass-agent-bot/internal/channel"
 	"hass-agent-bot/internal/config"
+	"hass-agent-bot/internal/console"
 	hare "hass-agent-bot/internal/ha/rest"
 	"hass-agent-bot/internal/llm"
 	"hass-agent-bot/internal/notify"
@@ -18,17 +21,29 @@ import (
 )
 
 type App struct {
-	cfg    *config.Config
-	logger *slog.Logger
-	ha     *hare.Client
-	tg     *tg.Bot
-	llm    *llm.Agent
-	sched  *scheduler.Engine
-	notif  *notify.Engine
+	cfg      *config.Config
+	logger   *slog.Logger
+	ha       *hare.Client
+	channels []channel.Channel
+	llm      *llm.Agent
+	sched    *scheduler.Engine
+	notif    *notify.Engine
+
+	consoleEnabled bool
 }
 
-func New(cfg *config.Config, logger *slog.Logger) *App {
-	return &App{cfg: cfg, logger: logger}
+type Option func(*App)
+
+func WithConsole(enabled bool) Option {
+	return func(a *App) { a.consoleEnabled = enabled }
+}
+
+func New(cfg *config.Config, logger *slog.Logger, opts ...Option) *App {
+	a := &App{cfg: cfg, logger: logger}
+	for _, o := range opts {
+		o(a)
+	}
+	return a
 }
 
 func (a *App) Run() error {
@@ -137,41 +152,74 @@ func (a *App) Run() error {
 	)
 	a.notif = nf
 
-	// Start Telegram bot
-	tgBot, err := tg.New(
-		a.cfg.TG.Token,
-		a.cfg.TG.AllowUserIDs,
-		haCli,
-		tg.WithAgent(agent),
-		tg.WithScheduler(sched),
-		tg.WithNotify(nf),
-	)
-	if err != nil {
-		a.logger.Error("failed to create TG bot", "error", err)
-		return err
+	// Build channels
+	var channels []channel.Channel
+
+	if a.cfg.TG.Token != "" {
+		tgBot, err := tg.New(
+			a.cfg.TG.Token,
+			a.cfg.TG.AllowUserIDs,
+			haCli,
+			tg.WithAgent(agent),
+			tg.WithScheduler(sched),
+			tg.WithNotify(nf),
+		)
+		if err != nil {
+			a.logger.Error("failed to create TG bot", "error", err)
+			return err
+		}
+		channels = append(channels, tgBot)
 	}
-	a.tg = tgBot
+
+	if a.consoleEnabled {
+		channels = append(channels, console.New(agent, sched, nf, haCli, a.logger))
+	}
+
+	if len(channels) == 0 {
+		return fmt.Errorf("no channels enabled")
+	}
+	a.channels = channels
 
 	sendToChat = func(ctx context.Context, chatID int64, text string) {
-		tgBot.SendMessage(ctx, chatID, text)
+		for _, ch := range a.channels {
+			ch.SendMessage(ctx, chatID, text)
+		}
 	}
 
 	nf.SetSender(func(ctx context.Context, text string) {
-		a.tg.SendNotification(ctx, text)
+		for _, ch := range a.channels {
+			ch.SendNotification(ctx, text)
+		}
 	})
 
 	go nf.Run(ctx)
+
+	// Start all channels
+	for _, ch := range a.channels {
+		go func(c channel.Channel) {
+			if err := c.Start(ctx); err != nil {
+				a.logger.Error("channel exited with error", "error", err)
+			}
+		}(ch)
+	}
 
 	// Graceful shutdown
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	go a.tg.Start(ctx)
-
 	a.logger.Info("bot started, waiting for shutdown signal")
 	<-sig
 	a.logger.Info("shutting down...")
-	a.tg.Close(ctx)
+
+	var wg sync.WaitGroup
+	for _, ch := range a.channels {
+		wg.Add(1)
+		go func(c channel.Channel) {
+			defer wg.Done()
+			c.Close(ctx)
+		}(ch)
+	}
+	wg.Wait()
 	sched.Stop()
 
 	return nil

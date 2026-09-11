@@ -9,8 +9,8 @@ import (
 )
 
 type yamlConfig struct {
-	Version  string `yaml:"version"`
-	HA struct {
+	Version string `yaml:"version"`
+	HA      struct {
 		URL   string `yaml:"url"`
 		Token string `yaml:"token"`
 	} `yaml:"ha"`
