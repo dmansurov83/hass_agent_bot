@@ -479,7 +479,7 @@ func (a *Agent) executeTool(ctx context.Context, fc *FunctionCall) (string, erro
 		return a.getHistory(ctxTool, fc.Arguments)
 
 	case "HassListSensors":
-		return a.listSensors(ctxTool)
+		return a.listSensors(ctxTool, fc.Arguments)
 
 	case "HassCancelAllTimers":
 		if a.sched == nil {
@@ -915,6 +915,11 @@ func (a *Agent) liveContext(ctx context.Context, args map[string]any) (string, e
 	if d, ok := asStringSlice(args["domain"]); ok {
 		domains = d
 	}
+	var deviceClasses []string
+	if dc, ok := asStringSlice(args["device_class"]); ok {
+		deviceClasses = dc
+	}
+	hasFilter := name != "" || area != "" || len(domains) > 0 || len(deviceClasses) > 0
 
 	// When filtering by area, resolve it through the HA area registry
 	// (entities are assigned to areas in HA, not by name substring).
@@ -954,13 +959,37 @@ func (a *Agent) liveContext(ctx context.Context, args map[string]any) (string, e
 				return false
 			}
 		}
+		if len(deviceClasses) > 0 {
+			dc, ok := s.Attributes["device_class"].(string)
+			if !ok {
+				return false
+			}
+			matches := false
+			for _, c := range deviceClasses {
+				if strings.EqualFold(dc, c) {
+					matches = true
+					break
+				}
+			}
+			if !matches {
+				return false
+			}
+		}
 		return true
 	}
 
+	// Cap the output when called without filters so a broad call cannot
+	// blow up the LLM context. Narrow queries are returned in full.
+	const maxUnfiltered = 40
 	var lines []string
 	lines = append(lines, "Live Context: обзор областей и устройств умного дома:")
+	matched := 0
 	for _, s := range states {
 		if !filter(s) {
+			continue
+		}
+		matched++
+		if !hasFilter && matched > maxUnfiltered {
 			continue
 		}
 		fn := friendlyName(s)
@@ -979,26 +1008,52 @@ func (a *Agent) liveContext(ctx context.Context, args map[string]any) (string, e
 		line += "\n  entity_id: " + s.EntityID
 		lines = append(lines, line)
 	}
+	if !hasFilter && matched > maxUnfiltered {
+		lines = append(lines, fmt.Sprintf("\n... и ещё %d сущностей. Вызови GetLiveContext с фильтром domain/device_class/area, чтобы получить точный список.", matched-maxUnfiltered))
+	}
 	if area != "" {
 		lines = append(lines, fmt.Sprintf("\nФильтр по зоне: %s (см. entity_id для адресации)", area))
 	}
 	return strings.Join(lines, "\n"), nil
 }
 
-// listSensors returns a list of ALL sensors with current values from /api/states.
-func (a *Agent) listSensors(ctx context.Context) (string, error) {
+// listSensors returns a list of sensors with current values from /api/states.
+// Accepts optional device_class filter.
+func (a *Agent) listSensors(ctx context.Context, args map[string]any) (string, error) {
 	states, err := a.ha.States(ctx)
 	if err != nil {
 		return "", err
 	}
+	var deviceClasses []string
+	if dc, ok := asStringSlice(args["device_class"]); ok {
+		deviceClasses = dc
+	}
+
 	var sensors []hare.State
 	for _, s := range states {
-		if strings.HasPrefix(s.EntityID, "sensor.") {
-			sensors = append(sensors, s)
+		if !strings.HasPrefix(s.EntityID, "sensor.") {
+			continue
 		}
+		if len(deviceClasses) > 0 {
+			dc, ok := s.Attributes["device_class"].(string)
+			if !ok {
+				continue
+			}
+			matches := false
+			for _, c := range deviceClasses {
+				if strings.EqualFold(dc, c) {
+					matches = true
+					break
+				}
+			}
+			if !matches {
+				continue
+			}
+		}
+		sensors = append(sensors, s)
 	}
 	if len(sensors) == 0 {
-		return "В Home Assistant нет сенсоров (sensor.*).", nil
+		return "В Home Assistant нет сенсоров (sensor.*), удовлетворяющих фильтру.", nil
 	}
 	sort.Slice(sensors, func(i, j int) bool { return sensors[i].EntityID < sensors[j].EntityID })
 

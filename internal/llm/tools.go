@@ -3,6 +3,22 @@ package llm
 // Function definitions for the LLM agent. All tools are implemented natively
 // against the HA REST API (no MCP server, no Assist exposure dependency).
 
+// Полные списки допустимых значений HA. Держим их в одном месте и подставляем
+// только в GetLiveContext — остальные тулы ссылаются на него, чтобы не
+// раздувать контекст LLM дублирующимися enum'ами.
+const (
+	sensorDeviceClassList = "temperature, humidity, power, energy, battery, illuminance, pressure, CO2, PM25, PM10, current, voltage, frequency, gas, water, moisture, speed, distance, duration, signal_strength, sound_pressure, volatile_organic_compounds, wind_speed, wind_direction, volume, weight, AQI, atmospheric_pressure, conductivity, data_rate, data_size, enum, monetary, ozone, PH, power_factor, precipitation, reactive_energy, reactive_power, radon, volume_flow_rate, volume_storage, timestamp, date, uptime, absolute_humidity, apparent_power, area, blood_glucose_concentration, CO, energy_distance, energy_storage, irradiance, nitrogen_dioxide, nitrogen_monoxide, nitrous_oxide, PM1, PM4, precipitation_intensity, temperature_delta"
+	binaryDeviceClassList = "battery, battery_charging, CO, cold, connectivity, door, garage_door, gas, heat, light, lock, moisture, motion, moving, occupancy, opening, plug, power, presence, problem, running, safety, smoke, sound, tamper, update, vibration, window"
+	domainList            = "light, switch, sensor, binary_sensor, climate, media_player, fan, cover, lock, vacuum, alarm_control_panel, camera, humidifier, water_heater, valve, lawn_mower, remote, siren, update, event, number, select, button, scene, script, automation, input_boolean, input_number, input_select, device_tracker, weather, calendar, notify, image, text, datetime, time, date, todo, geo_location"
+)
+
+// Короткие ссылки для тулов, где перечислять полный список не нужно —
+// модель видит GetLiveContext в том же наборе тулов и может посмотреть там.
+const (
+	devClassRef = "Полный список значений — в описании тула GetLiveContext."
+	domainRef   = "Полный список доменов — в описании тула GetLiveContext."
+)
+
 // WeatherFunction returns the function definition for the weather tool.
 func WeatherFunction() Function {
 	return Function{
@@ -49,9 +65,11 @@ func HistoryFunction() Function {
 func ListSensorsFunction() Function {
 	return Function{
 		Name:        "HassListSensors",
-		Description: "Получить список ВСЕХ сенсоров Home Assistant (sensor.*) с их текущими значениями: температура, влажность, мощность, напряжение, ток, счётчики энергии, стоимость и любые другие. Вызывай, когда пользователь просит «покажи все сенсоры», «список датчиков», «все значения».",
+		Description: "Получить список сенсоров Home Assistant (sensor.*) с их текущими значениями: температура, влажность, мощность, напряжение, ток, счётчики энергии, стоимость и любые другие. Вызывай, когда пользователь просит «покажи все сенсоры», «список датчиков», «все значения». Можно сузить фильтром device_class.",
 		Parameters: FunctionParameters(
-			map[string]any{},
+			map[string]any{
+				"device_class": map[string]any{"type": "string", "description": "Фильтр по device_class. " + devClassRef},
+			},
 			nil,
 		),
 	}
@@ -61,12 +79,13 @@ func ListSensorsFunction() Function {
 func LiveContextFunction() Function {
 	return Function{
 		Name:        "GetLiveContext",
-		Description: "Получить ТЕКУЩЕЕ состояние ВСЕХ устройств, датчиков, областей: сенсоры (sensor.*), свет, выключатели, климат, медиа, счётчики — с их entity_id. Вызывай без аргументов для полного списка или с name/domain/area для фильтрации. Показывает ВСЕ сущности HA, включая не экспонированные в Assist.",
+		Description: "Получить ТЕКУЩЕЕ состояние устройств, датчиков, областей: сенсоры, свет, выключатели, климат, медиа, счётчики — с их entity_id. ОБЯЗАТЕЛЬНО сужай запрос: domain + device_class + area. Примеры: domain=sensor,device_class=temperature или area=Кухня.",
 		Parameters: FunctionParameters(
 			map[string]any{
-				"name":   map[string]any{"type": "string", "description": "Фильтр по названию устройства или alias (без учёта регистра)."},
-				"domain": map[string]any{"type": "string", "description": "Фильтр по домену (light, sensor, switch, ...)."},
-				"area":   map[string]any{"type": "string", "description": "Фильтр по зоне (название или alias)."},
+				"name":         map[string]any{"type": "string", "description": "Фильтр по названию устройства или alias (без учёта регистра)."},
+				"domain":       map[string]any{"type": "string", "description": "Фильтр по домену. Все значения: " + domainList + "."},
+				"device_class": map[string]any{"type": "string", "description": "Фильтр по device_class. Все значения sensor: " + sensorDeviceClassList + ". Для binary_sensor: " + binaryDeviceClassList + "."},
+				"area":         map[string]any{"type": "string", "description": "Фильтр по зоне (название или alias)."},
 			},
 			nil,
 		),
@@ -82,8 +101,8 @@ func turnOnOffFunction(name, desc string) Function {
 			map[string]any{
 				"name":         map[string]any{"type": "string", "description": "Название устройства из GetLiveContext (friendly name или entity_id, например 'Свет в зале' или light.living_room). Не выдумывай!"},
 				"area":         map[string]any{"type": "string", "description": "Зона/комната (например 'Гостиная', 'Туалет'). Включит все устройства в зоне."},
-				"domain":       map[string]any{"type": "string", "description": "Домен устройств (light, switch, fan, ...) — применить ко всем таким устройствам."},
-				"device_class": map[string]any{"type": "string", "description": "device_class (switch, outlet, ...) — применить ко всем с таким классом."},
+				"domain":       map[string]any{"type": "string", "description": "Домен устройств — применить ко всем таким устройствам. " + devClassRef},
+				"device_class": map[string]any{"type": "string", "description": "device_class — применить ко всем с таким классом. " + devClassRef},
 			},
 			nil,
 		),
@@ -307,7 +326,7 @@ func SchedulerFunction() Function {
 				},
 				"domain": map[string]any{
 					"type":        "string",
-					"description": "Домен устройства (light, switch, fan, climate).",
+					"description": "Домен устройства. " + domainRef,
 				},
 				"label": map[string]any{
 					"type":        "string",
