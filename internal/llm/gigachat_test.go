@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -40,7 +42,7 @@ func newFakeGigaChat(t *testing.T, responses ...func(w http.ResponseWriter, body
 		})
 	})
 
-	mux.HandleFunc("/api/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+	chatHandler := func(w http.ResponseWriter, r *http.Request) {
 		i := int(f.calls.Add(1)) - 1
 		if r.Header.Get("Authorization") != "Bearer test_access_token_123" {
 			t.Errorf("chat: bad auth: %q", r.Header.Get("Authorization"))
@@ -53,7 +55,11 @@ func newFakeGigaChat(t *testing.T, responses ...func(w http.ResponseWriter, body
 			return
 		}
 		http.Error(w, "no more scripted responses", 500)
-	})
+	}
+	// Новый целевой хост и кастомные URL: /v1/chat/completions.
+	// Legacy-хост gigachat.devices.sberbank.ru: /api/v1/chat/completions.
+	mux.HandleFunc("/v1/chat/completions", chatHandler)
+	mux.HandleFunc("/api/v1/chat/completions", chatHandler)
 
 	f.server = httptest.NewServer(mux)
 	t.Cleanup(f.server.Close)
@@ -134,6 +140,24 @@ func TestGigaChatClient_MissingCredentials(t *testing.T) {
 	}
 }
 
+func TestChatPath(t *testing.T) {
+	cases := []struct {
+		baseURL string
+		want    string
+	}{
+		{"https://api.giga.chat", "/v1/chat/completions"},
+		{"https://api.giga.chat/", "/v1/chat/completions"},
+		{"https://gigachat.devices.sberbank.ru", "/api/v1/chat/completions"},
+		{"https://gigachat.devices.sberbank.ru/", "/api/v1/chat/completions"},
+		{"http://127.0.0.1:8080", "/v1/chat/completions"},
+	}
+	for _, c := range cases {
+		if got := chatPath(c.baseURL); got != c.want {
+			t.Errorf("chatPath(%q) = %q, want %q", c.baseURL, got, c.want)
+		}
+	}
+}
+
 func TestFunctionParameters(t *testing.T) {
 	p := FunctionParameters(
 		map[string]any{"entity_id": map[string]any{"type": "string"}},
@@ -152,11 +176,39 @@ func TestFunctionParameters(t *testing.T) {
 }
 
 func TestSystemPrompt(t *testing.T) {
-	p := SystemPrompt()
-	if p.Role != "system" {
-		t.Errorf("role = %q", p.Role)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "system_prompt.txt")
+	if err := os.WriteFile(path, []byte("Ты — помощник по умному дому через Home Assistant."), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
 	}
-	if !strings.Contains(p.Content, "Home Assistant") {
-		t.Errorf("prompt missing HA mention")
+	p, err := LoadSystemPrompt(path)
+	if err != nil {
+		t.Fatalf("LoadSystemPrompt: %v", err)
+	}
+	if !strings.Contains(p, "Home Assistant") {
+		t.Errorf("prompt missing HA mention: %q", p)
+	}
+
+	// fallback chain: first candidate missing, second present
+	used, p2, err := ResolveSystemPrompt(filepath.Join(dir, "missing.txt"), path)
+	if err != nil {
+		t.Fatalf("ResolveSystemPrompt fallback: %v", err)
+	}
+	if used != path {
+		t.Errorf("expected fallback to %s, got %q", path, used)
+	}
+	if p2 != p {
+		t.Errorf("fallback content differs")
+	}
+
+	if _, err := LoadSystemPrompt(filepath.Join(dir, "missing.txt")); err == nil {
+		t.Errorf("LoadSystemPrompt should fail for missing file")
+	}
+	empty := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(empty, []byte("   "), 0o644); err != nil {
+		t.Fatalf("write empty prompt: %v", err)
+	}
+	if _, err := LoadSystemPrompt(empty); err == nil {
+		t.Errorf("LoadSystemPrompt should fail for empty file")
 	}
 }

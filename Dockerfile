@@ -21,6 +21,11 @@ RUN update-ca-certificates
 
 COPY --from=build /out/hass-agent-bot /hass-agent-bot
 
+# Системный промпт (редактируется в data/system_prompt.txt в репозитории).
+# Кладём в /system_prompt.txt (корень контейнера) как фоллбэк: если volume /data
+# смонтирован целиком и перекрывает встроенную копию, бот подхватит файл отсюда.
+COPY data/system_prompt.txt /system_prompt.txt
+
 ENV TZ=Europe/Moscow
 
 VOLUME ["/data"]

@@ -52,6 +52,22 @@ func (f *fakeScheduler) ScheduleCron(expr string, action scheduler.Action, label
 func (f *fakeScheduler) Cancel(id string) bool { return false }
 func (f *fakeScheduler) List() []scheduler.Job  { return f.jobs }
 
+// newTestAgent builds an agent with the system prompt loaded from a temp file,
+// so HandleMessage tests exercise the required-prompt path.
+func newTestAgent(t *testing.T, llm LLMClient, ha HAClient, sched Scheduler, store HistoryStore, mem MemoryStore) *Agent {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "system_prompt.txt")
+	if err := os.WriteFile(path, []byte("Ты — помощник по умному дому через Home Assistant."), 0o644); err != nil {
+		t.Fatalf("write system prompt: %v", err)
+	}
+	agent := NewAgent(llm, ha, sched, store, mem)
+	if err := agent.SetSystemPromptPath(path); err != nil {
+		t.Fatalf("SetSystemPromptPath: %v", err)
+	}
+	return agent
+}
+
 func TestAgent_HandleMessage_ToolCall(t *testing.T) {
 	called := false
 	ha := &fakeHAClient{
@@ -86,7 +102,7 @@ func TestAgent_HandleMessage_ToolCall(t *testing.T) {
 		t.Fatalf("giga client: %v", err)
 	}
 
-	agent := NewAgent(gigaCli, ha, &fakeScheduler{}, nil, nil)
+	agent := newTestAgent(t, gigaCli, ha, &fakeScheduler{}, nil, nil)
 	reply, err := agent.HandleMessage(WithChatID(context.Background(), 100), "включи свет в зале")
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)
@@ -122,7 +138,7 @@ func TestAgent_HandleMessage_NoToolCall(t *testing.T) {
 		t.Fatalf("giga client: %v", err)
 	}
 
-	agent := NewAgent(gigaCli, ha, &fakeScheduler{}, nil, nil)
+	agent := newTestAgent(t, gigaCli, ha, &fakeScheduler{}, nil, nil)
 	reply, err := agent.HandleMessage(WithChatID(context.Background(), 100), "привет")
 	if err != nil {
 		t.Fatalf("HandleMessage: %v", err)

@@ -10,10 +10,11 @@ tg:
     - 123456789        # твой Telegram user_id
 
 llm:
-  provider: gigachat       # gigachat | openai
+  provider: gigachat           # gigachat | openai
   model: GigaChat-2-Pro
-  credentials: ""          # GigaChat: Basic-ключ, OpenAI: API key (sk-...)
-  base_url: ""             # Только для OpenAI-совместимых: https://api.deepseek.com, http://localhost:11434/v1, ...
+  credentials: ""              # GigaChat: Basic-ключ, OpenAI: API key (sk-...)
+  base_url: ""                 # GigaChat: https://api.giga.chat (новый целевой URL, для Ultra обязательно)
+                               # OpenAI: https://api.deepseek.com, http://localhost:11434/v1, ...
 
 notify:
   debounce_seconds: 30

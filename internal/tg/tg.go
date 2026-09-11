@@ -88,11 +88,22 @@ func (b *Bot) Close(ctx context.Context) {
 	b.cli.Close(ctx)
 }
 
+// SendMessage sends a plain or Markdown-formatted message to a chat.
+// Markdown is rendered when Telegram accepts it; on parse failure the text
+// is resent as plain text so LLM replies with stray * or _ never get lost.
 func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string) (int, error) {
 	msg, err := b.cli.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   text,
+		ChatID:    chatID,
+		Text:      text,
+		ParseMode: models.ParseModeMarkdownV1,
 	})
+	if err != nil {
+		b.log.Debug("tg: markdown send failed, retrying plain", "chat_id", chatID, "error", err)
+		msg, err = b.cli.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   text,
+		})
+	}
 	if err != nil {
 		b.log.Error("tg: send message", "chat_id", chatID, "error", err)
 		return 0, err
@@ -212,6 +223,19 @@ func (b *Bot) statusHandler(ctx context.Context, tgBot *bot.Bot, update *models.
 	})
 }
 
+// editWithMarkdown tries to edit a message with Markdown parsing.
+// Falls back to plain text if Telegram rejects the markdown.
+func (b *Bot) editWithMarkdown(ctx context.Context, tgBot *bot.Bot, params *bot.EditMessageTextParams) error {
+	params.ParseMode = models.ParseModeMarkdownV1
+	_, err := tgBot.EditMessageText(ctx, params)
+	if err != nil {
+		b.log.Debug("tg: markdown edit failed, retrying plain", "chat_id", params.ChatID, "error", err)
+		params.ParseMode = ""
+		_, err = tgBot.EditMessageText(ctx, params)
+	}
+	return err
+}
+
 func (b *Bot) textHandler(ctx context.Context, tgBot *bot.Bot, update *models.Update) {
 	chatID := update.Message.Chat.ID
 	text := update.Message.Text
@@ -250,7 +274,7 @@ func (b *Bot) textHandler(ctx context.Context, tgBot *bot.Bot, update *models.Up
 	}
 
 	// Заменяем "⏳ Думаю..." на итоговый ответ
-	if _, editErr := tgBot.EditMessageText(ctx, &bot.EditMessageTextParams{
+	if editErr := b.editWithMarkdown(ctx, tgBot, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: msg.ID,
 		Text:      reply,

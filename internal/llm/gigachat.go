@@ -16,11 +16,25 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://gigachat.devices.sberbank.ru"   // старый URL (работает для старых аккаунтов)
+	// defaultBaseURL — старый URL, работает для аккаунтов, подключённых до 17.07.2026.
+	// Новые подключения и модель GigaChat-3-Ultra доступны только на https://api.giga.chat
+	// (задаётся через config base_url / env LLM_BASE_URL).
+	defaultBaseURL = "https://gigachat.devices.sberbank.ru"
 	legacyAuthURL  = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
 	scopePers      = "GIGACHAT_API_PERS"
 	tokenTTL       = 30 * time.Minute
 )
+
+// chatPath возвращает путь chat completions для заданного base URL.
+// Новый целевой хост api.giga.chat отдаёт OpenAI-стиль /v1/..., legacy-хост
+// gigachat.devices.sberbank.ru — /api/v1/... . Для кастомных URL (тесты,
+// прокси) используется /v1/..., как у основного API.
+func chatPath(baseURL string) string {
+	if strings.Contains(baseURL, "gigachat.devices.sberbank.ru") {
+		return "/api/v1/chat/completions"
+	}
+	return "/v1/chat/completions"
+}
 
 // GigaChatClient is a thin HTTP client for the GigaChat REST API.
 type GigaChatClient struct {
@@ -148,7 +162,7 @@ func (c *GigaChatClient) Chat(ctx context.Context, messages []Message, functions
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+chatPath(c.baseURL), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

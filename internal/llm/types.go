@@ -71,6 +71,11 @@ type Function struct {
 
 // FunctionParameters is a helper to build JSON Schema parameters.
 func FunctionParameters(props map[string]any, required []string) map[string]any {
+	// GigaChat 3 Ultra (xgrammar) требует, чтобы required был массивом,
+	// а не null — иначе 422 "required must be an array".
+	if len(required) == 0 {
+		required = []string{}
+	}
 	return map[string]any{
 		"type":       "object",
 		"properties": props,

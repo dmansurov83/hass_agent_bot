@@ -56,7 +56,7 @@ func Load(path string) (*Config, error) {
 		Notify: NotifyConfig{
 			DebounceSeconds: 30,
 		},
-		DataDir: ".", // по умолчанию рядом с бинарником
+		DataDir: "data", // по умолчанию подпапка data рядом с бинарником
 	}
 
 	if path != "" {

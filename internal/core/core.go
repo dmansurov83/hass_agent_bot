@@ -113,6 +113,13 @@ func (a *App) Run() error {
 		defer memStore.Close()
 	}
 	agent := llm.NewAgent(llmClient, haCli, sched, histStore, memStore)
+	if err := agent.SetSystemPromptPath(
+		filepath.Join(a.cfg.DataDir, "system_prompt.txt"),
+		"system_prompt.txt",
+	); err != nil {
+		a.logger.Error("failed to load system prompt", "error", err)
+		return err
+	}
 	agentRef = agent
 	agentExecutor = func(ctx context.Context, prompt string) (string, error) {
 		return agent.HandleMessage(ctx, prompt)
@@ -194,6 +201,7 @@ func newLLMClient(cfg *config.LLMConfig, log *slog.Logger) (llm.LLMClient, error
 	case "gigachat":
 		return llm.NewGigaChatClient(llm.Options{
 			Credentials: cfg.Credentials,
+			BaseURL:     cfg.BaseURL,
 			Model:       cfg.Model,
 			Logger:      log,
 		})

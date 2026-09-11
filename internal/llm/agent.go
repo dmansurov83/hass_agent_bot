@@ -92,18 +92,21 @@ type Agent struct {
 	histories map[int64][]Message // chatID → messages (in-memory cache)
 	store     HistoryStore        // persistence (nil = don't save)
 	memory    MemoryStore         // durable memory (nil = disabled)
+
+	systemPrompt string // base system prompt (editable via data/system_prompt.txt)
 }
 
 func NewAgent(llm LLMClient, ha HAClient, sched Scheduler, store HistoryStore, mem MemoryStore) *Agent {
 	a := &Agent{
-		llm:       llm,
-		ha:        ha,
-		sched:     sched,
-		log:       slog.Default(),
-		histories: make(map[int64][]Message),
-		index:     haIndex{byName: map[string]string{}, byArea: map[string][]string{}, stateClass: map[string]string{}, unit: map[string]string{}, friendly: map[string]string{}},
-		store:     store,
-		memory:    mem,
+		llm:          llm,
+		ha:           ha,
+		sched:        sched,
+		log:          slog.Default(),
+		histories:    make(map[int64][]Message),
+		index:        haIndex{byName: map[string]string{}, byArea: map[string][]string{}, stateClass: map[string]string{}, unit: map[string]string{}, friendly: map[string]string{}},
+		store:        store,
+		memory:       mem,
+		systemPrompt: "",
 	}
 	if store != nil {
 		loaded, err := store.Load(context.Background())
@@ -241,6 +244,37 @@ func (a *Agent) resolveEntity(ctx context.Context, name, area string) ([]string,
 	return ids, nil
 }
 
+// SetSystemPromptPath loads the system prompt text from a file or a chain of
+// fallback candidates (e.g. <DataDir>/system_prompt.txt, then a copy shipped
+// with the binary). The prompt is required — the agent refuses to work without
+// it. Call once at startup, before HandleMessage.
+func (a *Agent) SetSystemPromptPath(paths ...string) error {
+	used, p, err := ResolveSystemPrompt(paths...)
+	if err != nil {
+		return err
+	}
+	a.systemPrompt = p
+	if used != "" {
+		a.log.Info("agent: system prompt loaded", "path", used)
+	}
+	return nil
+}
+
+// systemPrompt returns the base prompt with runtime context appended
+// (current date/time and remembered facts about the user).
+func (a *Agent) systemPromptWithContext(chatID int64) (string, error) {
+	if a.systemPrompt == "" {
+		return "", fmt.Errorf("agent: system prompt not loaded (call SetSystemPromptPath)")
+	}
+	sys := a.systemPrompt
+	now := time.Now()
+	sys += "\n\nТекущая дата и время: " + now.Format("02.01.2006 15:04") + " (" + now.Format("Monday") + ")"
+	if memBlock := a.memoryBlock(chatID); memBlock != "" {
+		sys += "\n\n=== Запомненное о пользователе (память) ===\n" + memBlock + "\n=== Конец памяти ==="
+	}
+	return sys, nil
+}
+
 func (a *Agent) HandleMessage(ctx context.Context, userText string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -256,11 +290,9 @@ func (a *Agent) HandleMessage(ctx context.Context, userText string) (string, err
 	history := a.histories[chatID]
 	messages := make([]Message, 0, 2+len(history)+1)
 
-	sys := SystemPrompt().Content
-	now := time.Now()
-	sys += "\n\nТекущая дата и время: " + now.Format("02.01.2006 15:04") + " (" + now.Format("Monday") + ")"
-	if memBlock := a.memoryBlock(chatID); memBlock != "" {
-		sys += "\n\n=== Запомненное о пользователе (память) ===\n" + memBlock + "\n=== Конец памяти ==="
+	sys, err := a.systemPromptWithContext(chatID)
+	if err != nil {
+		return "", err
 	}
 
 	if taskMode {
